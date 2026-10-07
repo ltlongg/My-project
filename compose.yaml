@@ -1,0 +1,20 @@
+# Môi trường phát triển: chỉ có Postgres. Ứng dụng chạy trực tiếp trên máy bằng uv.
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: bantin
+      POSTGRES_PASSWORD: bantin
+      POSTGRES_DB: bantin
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-54320}:5432"
+    volumes:
+      - db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bantin -d bantin"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  db:

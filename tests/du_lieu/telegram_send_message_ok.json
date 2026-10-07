@@ -1,0 +1,10 @@
+{
+  "ok": true,
+  "result": {
+    "message_id": 42,
+    "from": {"id": 123456, "is_bot": true, "first_name": "Bản tin", "username": "ban_tin_bot"},
+    "chat": {"id": -1001234567890, "title": "Nhóm thử", "type": "supergroup"},
+    "date": 1791334800,
+    "text": "Bản tin Công nghệ · 07/10/2026"
+  }
+}
