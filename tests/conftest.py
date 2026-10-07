@@ -13,11 +13,11 @@ import pytest
 from sqlalchemy import Engine, create_engine, func, make_url, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from bantin.chay_ky import ChayKy
-from bantin.csdl import nang_cap, tao_engine, tao_mo_phien
-from bantin.mo_hinh import BaiGoc, ChuyenMuc, CoSo, KenhDang, LoaiKenhDang, LoaiNguon, Nguon
-from bantin.phat_hanh import NoiDungBanTin
-from bantin.thu_thap import BaiGocMoi
+from bulletin.chay_ky import ChayKy
+from bulletin.collectors import BaiGocMoi
+from bulletin.csdl import nang_cap, tao_engine, tao_mo_phien
+from bulletin.mo_hinh import BaiGoc, ChuyenMuc, CoSo, KenhDang, LoaiKenhDang, LoaiNguon, Nguon
+from bulletin.publishers import NoiDungBanTin
 
 URL_MAC_DINH = "postgresql+psycopg://bantin:bantin@127.0.0.1:54320/bantin_test"
 GIO_VIET_NAM = ZoneInfo("Asia/Ho_Chi_Minh")

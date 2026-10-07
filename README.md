@@ -14,13 +14,13 @@ Cần [Docker](https://docs.docker.com/get-docker/) và [uv](https://docs.astral
 docker compose up -d --wait    # Postgres ở 127.0.0.1:54320
 uv sync
 cp .env.example .env           # rồi điền TELEGRAM_BOT_TOKEN và TELEGRAM_CHAT_ID
-uv run bantin khoi-tao         # tạo bảng và nạp Chuyên mục công nghệ, một Nguồn RSS, Kênh đăng
+uv run bulletin khoi-tao       # tạo bảng và nạp Chuyên mục công nghệ, một Nguồn RSS, Kênh đăng
 ```
 
 ## Chạy một Kỳ
 
 ```sh
-uv run bantin chay-ky cong-nghe
+uv run bulletin chay-ky cong-nghe
 ```
 
 Lệnh in ra kết quả của **Kỳ** (đã phát, không phát hoặc hỏng kèm lí do) và các **Tin** trong
@@ -43,9 +43,9 @@ uv run ruff format   # định dạng
 
 ## Bố cục
 
-- `src/bantin/chay_ky.py`: lối vào duy nhất "chạy một **Kỳ** cho **Chuyên mục** này tại thời điểm này".
-- `src/bantin/thu_thap/`: giao diện chung của bộ thu thập và bộ thu thập RSS.
-- `src/bantin/phat_hanh/`: giao diện chung của bộ phát và bộ phát Telegram.
-- `src/bantin/mo_hinh.py`, `src/bantin/migrations/`: các bảng và migration (Alembic).
+- `src/bulletin/chay_ky.py`: lối vào duy nhất "chạy một **Kỳ** cho **Chuyên mục** này tại thời điểm này".
+- `src/bulletin/collectors/`: giao diện chung của bộ thu thập và bộ thu thập RSS.
+- `src/bulletin/publishers/`: giao diện chung của bộ phát và bộ phát Telegram.
+- `src/bulletin/mo_hinh.py`, `src/bulletin/migrations/`: các bảng và migration (Alembic).
 - `tests/conftest.py`: khuôn test tại điểm "Chạy Kỳ" (**Nguồn** giả, **Kênh đăng** giả, đồng hồ giả).
-- `tests/du_lieu/`: phản hồi mẫu cho test của từng bộ nối ra bên ngoài.
+- `tests/fixtures/`: phản hồi mẫu cho test của từng bộ nối ra bên ngoài.

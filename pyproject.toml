@@ -1,5 +1,5 @@
 [project]
-name = "bantin"
+name = "bulletin"
 version = "0.1.0"
 description = "Bản tin tự động: thu thập, chọn lọc, tóm tắt và phát bản tin định kỳ"
 readme = "README.md"
@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-bantin = "bantin.cli:main"
+bulletin = "bulletin.cli:main"
 
 [dependency-groups]
 dev = [
@@ -29,7 +29,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/bantin"]
+packages = ["src/bulletin"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

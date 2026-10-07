@@ -6,11 +6,11 @@ from pathlib import Path
 import httpx
 import pytest
 
-from bantin.phat_hanh import NoiDungBanTin, NoiDungTin
-from bantin.phat_hanh.telegram import LoiPhatTelegram, PhatTelegram
+from bulletin.publishers import NoiDungBanTin, NoiDungTin
+from bulletin.publishers.telegram import LoiPhatTelegram, PhatTelegram
 from tests.conftest import luc
 
-DU_LIEU = Path(__file__).parent / "du_lieu"
+DU_LIEU = Path(__file__).parent / "fixtures"
 TOKEN = "123456:ABC-DEF"
 MA_TRO_CHUYEN = "-1001234567890"
 

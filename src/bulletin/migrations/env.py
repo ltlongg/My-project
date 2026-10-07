@@ -1,14 +1,14 @@
 from alembic import context
 from sqlalchemy import create_engine
 
-from bantin.cau_hinh import CauHinh
-from bantin.mo_hinh import CoSo
+from bulletin.cau_hinh import CauHinh
+from bulletin.mo_hinh import CoSo
 
 target_metadata = CoSo.metadata
 
 
 def run_migrations_online() -> None:
-    # bantin.csdl.nang_cap truyền sẵn kết nối; lệnh alembic gọi trực tiếp thì đọc DATABASE_URL.
+    # bulletin.csdl.nang_cap truyền sẵn kết nối; lệnh alembic gọi trực tiếp thì đọc DATABASE_URL.
     ket_noi = context.config.attributes.get("connection")
     if ket_noi is not None:
         context.configure(connection=ket_noi, target_metadata=target_metadata)

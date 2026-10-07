@@ -4,9 +4,9 @@ from datetime import datetime
 
 import pytest
 
-from bantin.mo_hinh import KetQuaKy
-from bantin.phat_hanh import NoiDungBanTin, NoiDungTin
-from bantin.thu_thap import BaiGocMoi
+from bulletin.collectors import BaiGocMoi
+from bulletin.mo_hinh import KetQuaKy
+from bulletin.publishers import NoiDungBanTin, NoiDungTin
 from tests.conftest import TheGioi, luc
 
 RSS = "https://bao.example/rss"

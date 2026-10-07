@@ -3,7 +3,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from bantin.mo_hinh import ChuyenMuc, KenhDang, LoaiKenhDang, LoaiNguon, Nguon
+from bulletin.mo_hinh import ChuyenMuc, KenhDang, LoaiKenhDang, LoaiNguon, Nguon
 
 MA_CONG_NGHE = "cong-nghe"
 RSS_KHOI_DAU = ("VnExpress Khoa học công nghệ", "https://vnexpress.net/rss/khoa-hoc-cong-nghe.rss")

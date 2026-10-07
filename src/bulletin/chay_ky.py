@@ -9,8 +9,9 @@ from sqlalchemy import func, literal, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
-from bantin.dia_chi import chuan_hoa
-from bantin.mo_hinh import (
+from bulletin.collectors import BaiGocMoi, BoThuThap
+from bulletin.dia_chi import chuan_hoa
+from bulletin.mo_hinh import (
     BaiGoc,
     BanTin,
     ChuyenMuc,
@@ -24,8 +25,7 @@ from bantin.mo_hinh import (
     bai_goc_nguon,
     chuyen_muc_nguon,
 )
-from bantin.phat_hanh import BoPhat, NoiDungBanTin, NoiDungTin
-from bantin.thu_thap import BaiGocMoi, BoThuThap
+from bulletin.publishers import BoPhat, NoiDungBanTin, NoiDungTin
 
 log = logging.getLogger(__name__)
 

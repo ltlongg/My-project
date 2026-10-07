@@ -1,2 +1,2 @@
 # Recorded responses are kept byte-for-byte.
-tests/du_lieu/* -text
+tests/fixtures/* -text

@@ -1,4 +1,4 @@
-"""Dòng lệnh `bantin`: nạp dữ liệu khởi tạo và chạy một Kỳ ngay bây giờ."""
+"""Dòng lệnh `bulletin`: nạp dữ liệu khởi tạo và chạy một Kỳ ngay bây giờ."""
 
 import argparse
 import io
@@ -9,13 +9,13 @@ from datetime import UTC, datetime
 
 import httpx
 
-from bantin.cau_hinh import CauHinh
-from bantin.chay_ky import ChayKy
-from bantin.csdl import nang_cap, tao_engine, tao_mo_phien
-from bantin.khoi_tao import MA_CONG_NGHE, khoi_tao
-from bantin.mo_hinh import KetQuaKy, LoaiKenhDang, LoaiNguon
-from bantin.phat_hanh.telegram import PhatTelegram
-from bantin.thu_thap.rss import ThuThapRss
+from bulletin.cau_hinh import CauHinh
+from bulletin.chay_ky import ChayKy
+from bulletin.collectors.rss import ThuThapRss
+from bulletin.csdl import nang_cap, tao_engine, tao_mo_phien
+from bulletin.khoi_tao import MA_CONG_NGHE, khoi_tao
+from bulletin.mo_hinh import KetQuaKy, LoaiKenhDang, LoaiNguon
+from bulletin.publishers.telegram import PhatTelegram
 
 NHAN_KET_QUA = {
     KetQuaKy.DA_PHAT: "Đã phát",
@@ -35,7 +35,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # httpx ghi lại địa chỉ từng lời gọi, mà địa chỉ của Telegram có chứa token của bot.
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    phan_tich = argparse.ArgumentParser(prog="bantin", description=__doc__)
+    phan_tich = argparse.ArgumentParser(prog="bulletin", description=__doc__)
     lenh = phan_tich.add_subparsers(dest="lenh", required=True)
     lenh.add_parser("khoi-tao", help="Nâng cấp lược đồ và nạp dữ liệu khởi tạo")
     lenh_chay_ky = lenh.add_parser("chay-ky", help="Chạy một Kỳ cho một Chuyên mục ngay bây giờ")
@@ -58,7 +58,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("Thiếu TELEGRAM_BOT_TOKEN; điền vào .env rồi chạy lại.", file=sys.stderr)
         return 2
     with httpx.Client(
-        timeout=20, headers={"User-Agent": "Mozilla/5.0 (compatible; bantin/0.1)"}
+        timeout=20, headers={"User-Agent": "Mozilla/5.0 (compatible; bulletin/0.1)"}
     ) as client:
         chay_ky = ChayKy(
             mo_phien,
@@ -68,7 +68,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             ky = chay_ky.chay(tham_so.chuyen_muc, datetime.now(UTC))
         except LookupError as loi:
-            print(f"{loi}. Đã chạy `bantin khoi-tao` chưa?", file=sys.stderr)
+            print(f"{loi}. Đã chạy `bulletin khoi-tao` chưa?", file=sys.stderr)
             return 2
 
     assert ky.ket_qua is not None

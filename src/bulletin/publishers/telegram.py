@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from bantin.phat_hanh import NoiDungBanTin
+from bulletin.publishers import NoiDungBanTin
 
 GIO_VIET_NAM = ZoneInfo("Asia/Ho_Chi_Minh")
 # Giới hạn của Telegram cho một tin nhắn chữ, tính theo đơn vị UTF-16.

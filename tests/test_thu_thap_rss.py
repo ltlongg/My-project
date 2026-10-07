@@ -1,4 +1,4 @@
-"""Bộ thu thập RSS, test bằng feed thật đã ghi lại ở tests/du_lieu; không gọi mạng."""
+"""Bộ thu thập RSS, test bằng feed thật đã ghi lại ở tests/fixtures; không gọi mạng."""
 
 from datetime import datetime
 from pathlib import Path
@@ -6,11 +6,11 @@ from pathlib import Path
 import httpx
 import pytest
 
-from bantin.thu_thap import BaiGocMoi
-from bantin.thu_thap.rss import LoiThuThapRss, ThuThapRss
+from bulletin.collectors import BaiGocMoi
+from bulletin.collectors.rss import LoiThuThapRss, ThuThapRss
 from tests.conftest import luc
 
-DU_LIEU = Path(__file__).parent / "du_lieu"
+DU_LIEU = Path(__file__).parent / "fixtures"
 VNEXPRESS = "https://vnexpress.net/rss/khoa-hoc-cong-nghe.rss"
 THE_VERGE = "https://www.theverge.com/rss/index.xml"
 

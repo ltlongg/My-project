@@ -7,7 +7,7 @@ from time import struct_time
 import feedparser
 import httpx
 
-from bantin.thu_thap import BaiGocMoi
+from bulletin.collectors import BaiGocMoi
 
 
 class LoiThuThapRss(Exception):
