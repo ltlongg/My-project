@@ -9,3 +9,6 @@ class CauHinh(BaseSettings):
     database_url: str = "postgresql+psycopg://bantin:bantin@127.0.0.1:54320/bantin"
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
+    # Endpoint LLM tương thích OpenAI.
+    openai_base_url: str | None = None
+    openai_api_key: str | None = None

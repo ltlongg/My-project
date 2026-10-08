@@ -13,9 +13,12 @@ Cần [Docker](https://docs.docker.com/get-docker/) và [uv](https://docs.astral
 ```sh
 docker compose up -d --wait    # Postgres ở 127.0.0.1:54320
 uv sync
-cp .env.example .env           # rồi điền TELEGRAM_BOT_TOKEN và TELEGRAM_CHAT_ID
+bash scripts/setup-keys.sh     # dẫn từng bước lấy khoá và tài khoản, ghi vào .env
 uv run bulletin khoi-tao       # tạo bảng và nạp Chuyên mục công nghệ, một Nguồn RSS, Kênh đăng
 ```
+
+`scripts/setup-keys.sh` chạy bằng Git Bash trên Windows và chạy lại được: giá trị đã có được giữ khi
+nhấn Enter. Muốn điền tay thì sao chép `.env.example` thành `.env`.
 
 ## Chạy một Kỳ
 
@@ -25,6 +28,17 @@ uv run bulletin chay-ky cong-nghe
 
 Lệnh in ra kết quả của **Kỳ** (đã phát, không phát hoặc hỏng kèm lí do) và các **Tin** trong
 **Bản tin**. Mã thoát khác 0 khi **Kỳ** hỏng.
+
+## Thử endpoint LLM
+
+```sh
+uv run bulletin thu-llm                        # mọi model của endpoint, mất chừng mười phút
+uv run bulletin thu-llm cx/gpt-5.5 ds/deepseek-chat
+```
+
+Lệnh gọi endpoint thật và in một báo cáo markdown: từng model có gọi thường, gọi công cụ, trả kết quả
+có cấu trúc và viết tiếng Việt được không. Chạy lại mỗi khi đổi model; kết quả lần gần nhất và model
+chọn cho từng vai trò nằm ở [docs/llm-endpoint.md](docs/llm-endpoint.md).
 
 ## Test
 
@@ -46,6 +60,7 @@ uv run ruff format   # định dạng
 - `src/bulletin/chay_ky.py`: lối vào duy nhất "chạy một **Kỳ** cho **Chuyên mục** này tại thời điểm này".
 - `src/bulletin/collectors/`: giao diện chung của bộ thu thập và bộ thu thập RSS.
 - `src/bulletin/publishers/`: giao diện chung của bộ phát và bộ phát Telegram.
+- `src/bulletin/thu_llm.py`: bộ thử endpoint LLM.
 - `src/bulletin/mo_hinh.py`, `src/bulletin/migrations/`: các bảng và migration (Alembic).
 - `tests/conftest.py`: khuôn test tại điểm "Chạy Kỳ" (**Nguồn** giả, **Kênh đăng** giả, đồng hồ giả).
 - `tests/fixtures/`: phản hồi mẫu cho test của từng bộ nối ra bên ngoài.
