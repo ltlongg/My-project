@@ -1,6 +1,6 @@
 """Test tại điểm "Chạy Kỳ": khẳng định về thứ tới Kênh đăng giả và thứ được lưu."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -19,6 +19,7 @@ def test_ky_phat_ban_tin_gom_cac_tin_ve_bai_goc_moi_kem_link(the_gioi: TheGioi) 
         RSS,
         BaiGocMoi("https://bao.example/a", "Bài A", luc(7, 6)),
         BaiGocMoi("https://bao.example/b", "Bài B", luc(7, 7)),
+        BaiGocMoi("https://bao.example/c", "Bài C", luc(7, 5)),
     )
 
     ky = the_gioi.chay_ky.chay("cong-nghe", luc(7, 8))
@@ -33,6 +34,7 @@ def test_ky_phat_ban_tin_gom_cac_tin_ve_bai_goc_moi_kem_link(the_gioi: TheGioi) 
                 tin=(
                     NoiDungTin("Bài B", "Tóm tắt của Bài B.", "https://bao.example/b"),
                     NoiDungTin("Bài A", "Tóm tắt của Bài A.", "https://bao.example/a"),
+                    NoiDungTin("Bài C", "Tóm tắt của Bài C.", "https://bao.example/c"),
                 ),
             ),
         )
@@ -44,31 +46,47 @@ def tieu_de_da_phat(the_gioi: TheGioi) -> list[list[str]]:
     return [[tin.tieu_de for tin in ban_tin.tin] for _, ban_tin in the_gioi.kenh_dang.da_nhan]
 
 
+def ba_bai(ten: str, xuat_ban_luc: datetime) -> list[BaiGocMoi]:
+    """Ba Bài gốc "<ten> 1" tới "<ten> 3", cách nhau một phút, bài 1 mới nhất; đủ để Bản tin
+    được phát."""
+    return [
+        BaiGocMoi(
+            f"https://bao.example/{ten.replace(' ', '-')}-{so}",
+            f"{ten} {so}",
+            xuat_ban_luc - timedelta(minutes=so),
+        )
+        for so in (1, 2, 3)
+    ]
+
+
 def test_ky_dau_tien_chi_xet_bai_goc_cua_24_gio_gan_nhat(the_gioi: TheGioi) -> None:
     the_gioi.them_chuyen_muc("cong-nghe", ten="Công nghệ", nguon=[RSS], kenh_dang=[KENH_DANG])
     the_gioi.nguon.co(
         RSS,
         BaiGocMoi("https://bao.example/cu", "Bài hôm kia", luc(6, 7, 59)),
-        BaiGocMoi("https://bao.example/moi", "Bài hôm qua", luc(6, 8, 1)),
+        *ba_bai("Bài hôm qua", luc(6, 8, 4)),
     )
 
     the_gioi.chay_ky.chay("cong-nghe", luc(7, 8))
 
-    assert tieu_de_da_phat(the_gioi) == [["Bài hôm qua"]]
+    assert tieu_de_da_phat(the_gioi) == [["Bài hôm qua 1", "Bài hôm qua 2", "Bài hôm qua 3"]]
 
 
 def test_ky_sau_chi_xet_bai_goc_xuat_hien_tu_ban_tin_truoc(the_gioi: TheGioi) -> None:
     the_gioi.them_chuyen_muc("cong-nghe", ten="Công nghệ", nguon=[RSS], kenh_dang=[KENH_DANG])
-    bai_sang = BaiGocMoi("https://bao.example/sang", "Bài buổi sáng", luc(7, 7))
-    bai_chieu = BaiGocMoi("https://bao.example/chieu", "Bài buổi chiều", luc(7, 15))
-    the_gioi.nguon.co(RSS, bai_sang)
+    bai_sang = ba_bai("Bài sáng", luc(7, 7))
+    bai_chieu = ba_bai("Bài chiều", luc(7, 15))
+    the_gioi.nguon.co(RSS, *bai_sang)
     the_gioi.chay_ky.chay("cong-nghe", luc(7, 8))
 
-    # Nguồn vẫn còn liệt kê bài buổi sáng, như một RSS feed thật.
-    the_gioi.nguon.co(RSS, bai_sang, bai_chieu)
+    # Nguồn vẫn còn liệt kê các bài buổi sáng, như một RSS feed thật.
+    the_gioi.nguon.co(RSS, *bai_sang, *bai_chieu)
     the_gioi.chay_ky.chay("cong-nghe", luc(8, 8))
 
-    assert tieu_de_da_phat(the_gioi) == [["Bài buổi sáng"], ["Bài buổi chiều"]]
+    assert tieu_de_da_phat(the_gioi) == [
+        ["Bài sáng 1", "Bài sáng 2", "Bài sáng 3"],
+        ["Bài chiều 1", "Bài chiều 2", "Bài chiều 3"],
+    ]
 
 
 def test_cung_bai_goc_duoi_hai_dia_chi_khac_nhau_chi_thanh_mot_tin(the_gioi: TheGioi) -> None:
@@ -76,7 +94,11 @@ def test_cung_bai_goc_duoi_hai_dia_chi_khac_nhau_chi_thanh_mot_tin(the_gioi: The
     the_gioi.them_chuyen_muc(
         "cong-nghe", ten="Công nghệ", nguon=[RSS, rss_khac], kenh_dang=[KENH_DANG]
     )
-    the_gioi.nguon.co(RSS, BaiGocMoi("https://bao.example/tin/a", "Bài A", luc(7, 7)))
+    the_gioi.nguon.co(
+        RSS,
+        BaiGocMoi("https://bao.example/tin/a", "Bài A", luc(7, 7)),
+        *ba_bai("Bài khác", luc(7, 6)),
+    )
     the_gioi.nguon.co(
         rss_khac,
         BaiGocMoi(
@@ -88,7 +110,7 @@ def test_cung_bai_goc_duoi_hai_dia_chi_khac_nhau_chi_thanh_mot_tin(the_gioi: The
 
     the_gioi.chay_ky.chay("cong-nghe", luc(7, 8))
 
-    assert tieu_de_da_phat(the_gioi) == [["Bài A"]]
+    assert tieu_de_da_phat(the_gioi) == [["Bài A", "Bài khác 1", "Bài khác 2", "Bài khác 3"]]
 
 
 def test_khong_co_bai_goc_moi_thi_khong_phat(the_gioi: TheGioi) -> None:
@@ -107,7 +129,7 @@ def test_moi_kenh_dang_deu_loi_thi_ky_hong_va_bai_goc_duoc_xet_lai_o_ky_sau(
     the_gioi: TheGioi,
 ) -> None:
     the_gioi.them_chuyen_muc("cong-nghe", ten="Công nghệ", nguon=[RSS], kenh_dang=[KENH_DANG])
-    the_gioi.nguon.co(RSS, BaiGocMoi("https://bao.example/a", "Bài A", luc(7, 7)))
+    the_gioi.nguon.co(RSS, *ba_bai("Bài", luc(7, 7)))
     the_gioi.kenh_dang.hong(KENH_DANG, RuntimeError("bot bị chặn khỏi nhóm"))
 
     ky_hong = the_gioi.chay_ky.chay("cong-nghe", luc(7, 8))
@@ -120,7 +142,7 @@ def test_moi_kenh_dang_deu_loi_thi_ky_hong_va_bai_goc_duoc_xet_lai_o_ky_sau(
     ky_sau = the_gioi.chay_ky.chay("cong-nghe", luc(7, 8, 30))
 
     assert ky_sau.ket_qua is KetQuaKy.DA_PHAT
-    assert tieu_de_da_phat(the_gioi) == [["Bài A"]]
+    assert tieu_de_da_phat(the_gioi) == [["Bài 1", "Bài 2", "Bài 3"]]
 
 
 def test_mot_kenh_dang_loi_khong_chan_kenh_dang_khac(the_gioi: TheGioi) -> None:
@@ -128,7 +150,7 @@ def test_mot_kenh_dang_loi_khong_chan_kenh_dang_khac(the_gioi: TheGioi) -> None:
     the_gioi.them_chuyen_muc(
         "cong-nghe", ten="Công nghệ", nguon=[RSS], kenh_dang=[kenh_dang_loi, KENH_DANG]
     )
-    the_gioi.nguon.co(RSS, BaiGocMoi("https://bao.example/a", "Bài A", luc(7, 7)))
+    the_gioi.nguon.co(RSS, *ba_bai("Bài", luc(7, 7)))
     the_gioi.kenh_dang.hong(kenh_dang_loi, RuntimeError("quá thời gian"))
 
     ky = the_gioi.chay_ky.chay("cong-nghe", luc(7, 8))
@@ -144,12 +166,12 @@ def test_mot_nguon_loi_van_ra_ban_tin_tu_nguon_con_lai(the_gioi: TheGioi) -> Non
         "cong-nghe", ten="Công nghệ", nguon=[rss_loi, RSS], kenh_dang=[KENH_DANG]
     )
     the_gioi.nguon.hong(rss_loi, RuntimeError("máy chủ trả về 503"))
-    the_gioi.nguon.co(RSS, BaiGocMoi("https://bao.example/a", "Bài A", luc(7, 7)))
+    the_gioi.nguon.co(RSS, *ba_bai("Bài", luc(7, 7)))
 
     ky = the_gioi.chay_ky.chay("cong-nghe", luc(7, 8))
 
     assert ky.ket_qua is KetQuaKy.DA_PHAT
-    assert tieu_de_da_phat(the_gioi) == [["Bài A"]]
+    assert tieu_de_da_phat(the_gioi) == [["Bài 1", "Bài 2", "Bài 3"]]
     assert the_gioi.tinh_trang_nguon() == {rss_loi: "máy chủ trả về 503", RSS: None}
 
 
@@ -186,17 +208,18 @@ def test_hai_chuyen_muc_chung_nguon_co_moc_rieng_va_bai_goc_chi_luu_mot_lan(
     the_gioi.them_chuyen_muc(
         "tai-chinh", ten="Tài chính", nguon=[RSS], kenh_dang=[kenh_dang_tai_chinh]
     )
-    the_gioi.nguon.co(RSS, BaiGocMoi("https://bao.example/a", "Bài A", luc(7, 7)))
+    the_gioi.nguon.co(RSS, *ba_bai("Bài", luc(7, 7)))
 
     the_gioi.chay_ky.chay("cong-nghe", luc(7, 8))
-    # Bài A đã phát ở Công nghệ nhưng với Tài chính nó vẫn là mới.
+    # Các bài đã phát ở Công nghệ nhưng với Tài chính chúng vẫn là mới.
     the_gioi.chay_ky.chay("tai-chinh", luc(7, 12))
 
+    tieu_de = ["Bài 1", "Bài 2", "Bài 3"]
     assert [
         (dia_chi, ban_tin.chuyen_muc, [tin.tieu_de for tin in ban_tin.tin])
         for dia_chi, ban_tin in the_gioi.kenh_dang.da_nhan
-    ] == [(KENH_DANG, "Công nghệ", ["Bài A"]), (kenh_dang_tai_chinh, "Tài chính", ["Bài A"])]
-    assert the_gioi.so_bai_goc_da_luu() == 1
+    ] == [(KENH_DANG, "Công nghệ", tieu_de), (kenh_dang_tai_chinh, "Tài chính", tieu_de)]
+    assert the_gioi.so_bai_goc_da_luu() == 3
 
 
 def test_chuyen_muc_chua_co_kenh_dang_thi_ky_hong_kem_li_do(the_gioi: TheGioi) -> None:
@@ -215,6 +238,7 @@ def test_ban_tin_duoc_luu_dung_nhu_da_gui(the_gioi: TheGioi) -> None:
         RSS,
         BaiGocMoi("https://bao.example/a", "Bài A", luc(7, 6)),
         BaiGocMoi("https://bao.example/b", "Bài B", luc(7, 7)),
+        BaiGocMoi("https://bao.example/c", "Bài C", luc(7, 5)),
     )
 
     the_gioi.chay_ky.chay("cong-nghe", luc(7, 8))

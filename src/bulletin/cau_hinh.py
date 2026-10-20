@@ -17,6 +17,7 @@ class CauHinh(BaseSettings):
     # Model mặc định, và model riêng của từng vai trò; để trống thì dùng model mặc định.
     model: str | None = None
     model_bien_tap: str | None = None
+    model_kiem_chung: str | None = None
     # Công cụ tìm kiếm web của Biên tập.
     cong_cu_tim_kiem: Literal["tavily", "brave"] = "tavily"
     tavily_api_key: str | None = None

@@ -27,6 +27,7 @@ class VaiTro(StrEnum):
     """Agent mà một Hướng dẫn chỉ dẫn."""
 
     BIEN_TAP = "bien_tap"
+    KIEM_CHUNG = "kiem_chung"
 
 
 def _cot_enum(loai: type[StrEnum]) -> Enum:
@@ -150,11 +151,15 @@ class Ky(CoSo):
     # Chưa có kết quả nghĩa là Kỳ đang chạy hoặc bị gián đoạn giữa chừng.
     ket_qua: Mapped[KetQuaKy | None] = mapped_column(_cot_enum(KetQuaKy))
     li_do: Mapped[str | None]
-    # Phiên bản Hướng dẫn mà Biên tập dùng ở Kỳ này.
+    # Phiên bản Hướng dẫn mà Biên tập và Kiểm chứng dùng ở Kỳ này.
     huong_dan_bien_tap_id: Mapped[int | None] = mapped_column(ForeignKey("huong_dan.id"))
+    huong_dan_kiem_chung_id: Mapped[int | None] = mapped_column(ForeignKey("huong_dan.id"))
 
     chuyen_muc: Mapped[ChuyenMuc] = relationship()
-    huong_dan_bien_tap: Mapped[HuongDan | None] = relationship()
+    huong_dan_bien_tap: Mapped[HuongDan | None] = relationship(foreign_keys=[huong_dan_bien_tap_id])
+    huong_dan_kiem_chung: Mapped[HuongDan | None] = relationship(
+        foreign_keys=[huong_dan_kiem_chung_id]
+    )
     ban_tin: Mapped[BanTin | None] = relationship(back_populates="ky")
 
 
@@ -165,6 +170,7 @@ class BanTin(CoSo):
     ky_id: Mapped[int] = mapped_column(ForeignKey("ky.id"), unique=True)
 
     ky: Mapped[Ky] = relationship(back_populates="ban_tin")
+    # Mọi Tin Biên tập nộp, kể cả Tin bị bỏ vì không qua Kiểm chứng.
     tin: Mapped[list[Tin]] = relationship(back_populates="ban_tin", order_by="Tin.thu_tu")
 
 
@@ -175,11 +181,35 @@ class Tin(CoSo):
     id: Mapped[int] = mapped_column(primary_key=True)
     ban_tin_id: Mapped[int] = mapped_column(ForeignKey("ban_tin.id"))
     thu_tu: Mapped[int]
+    # Bản viết cuối cùng; các bản trước nằm ở các lượt Kiểm chứng.
     tieu_de: Mapped[str]
     tom_tat: Mapped[str]
     # Vì sao Biên tập chọn Tin này.
     li_do: Mapped[str]
     bai_goc_chinh_id: Mapped[int] = mapped_column(ForeignKey("bai_goc.id"))
+    # Có giá trị là Tin bị bỏ khỏi Bản tin vì không qua Kiểm chứng, và đây là lí do.
+    li_do_bo: Mapped[str | None]
 
     ban_tin: Mapped[BanTin] = relationship(back_populates="tin")
     bai_goc_chinh: Mapped[BaiGoc] = relationship()
+    luot_kiem_chung: Mapped[list[LuotKiemChung]] = relationship(
+        back_populates="tin", order_by="LuotKiemChung.lan", cascade="all, delete-orphan"
+    )
+
+
+class LuotKiemChung(CoSo):
+    """Một lần Kiểm chứng xét một bản viết của Tin; bản sau một lượt không đạt là bản viết lại."""
+
+    __tablename__ = "luot_kiem_chung"
+    __table_args__ = (UniqueConstraint("tin_id", "lan"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tin_id: Mapped[int] = mapped_column(ForeignKey("tin.id", ondelete="CASCADE"))
+    # Lượt thứ mấy, từ 1; lượt 1 xét bản đầu tiên.
+    lan: Mapped[int]
+    tieu_de: Mapped[str]
+    tom_tat: Mapped[str]
+    dat: Mapped[bool]
+    li_do: Mapped[str]
+
+    tin: Mapped[Tin] = relationship(back_populates="luot_kiem_chung")

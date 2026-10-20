@@ -23,6 +23,7 @@ from sqlalchemy import Engine, create_engine, func, make_url, select, text, upda
 from sqlalchemy.orm import Session, sessionmaker
 
 from bulletin.agents.bien_tap import BienTap
+from bulletin.agents.kiem_chung import KiemChung
 from bulletin.chay_ky import ChayKy
 from bulletin.collectors import BaiGocMoi
 from bulletin.csdl import BANG_TRANG_THAI, mo_kho_trang_thai, nang_cap, tao_engine, tao_mo_phien
@@ -35,6 +36,7 @@ from bulletin.mo_hinh import (
     KenhDang,
     LoaiKenhDang,
     LoaiNguon,
+    LuotKiemChung,
     Nguon,
     Tin,
     VaiTro,
@@ -238,6 +240,28 @@ def nop(*tin: TinViet) -> Buoc:
     )
 
 
+def viet_lai(*tin: TinViet) -> Buoc:
+    """LLM nộp bản viết lại của các Tin bị Kiểm chứng trả lại; `li_do` của TinViet bị bỏ qua."""
+    return lambda ung_vien: AIMessage(
+        "",
+        tool_calls=[
+            _goi(
+                "viet_lai_tin",
+                {
+                    "tin": [
+                        {
+                            "ma_bai_goc": _ma(ung_vien, t.bai_goc),
+                            "tieu_de": t.tieu_de,
+                            "tom_tat": t.tom_tat,
+                        }
+                        for t in tin
+                    ]
+                },
+            )
+        ],
+    )
+
+
 class LLMTheoKichBan(BaseChatModel):
     """LLM giả của Biên tập: trả lời lần lượt theo kịch bản test đặt.
 
@@ -294,7 +318,69 @@ def _nop_tat_ca(ung_vien: Sequence[UngVienThay]) -> AIMessage:
     )
 
 
+def ket_luan(dat: bool, li_do: str = "") -> AIMessage:
+    """Kiểm chứng trả kết luận về Tin đang xét."""
+    return AIMessage("", tool_calls=[_goi("ket_luan", {"dat": dat, "li_do": li_do})])
+
+
+class KiemChungTheoLuat(BaseChatModel):
+    """LLM giả của Kiểm chứng: Tin có chứa một chi tiết test đã đánh dấu là sai thì không đạt,
+    còn lại đạt.
+
+    Các bước đặt bằng `se` được dùng trước luật, để test cho nó trả lời hỏng hay ném lỗi.
+    """
+
+    sai: dict[str, str] = Field(default_factory=dict)
+    kich_ban: list[AIMessage | BaseException] = Field(default_factory=list)
+    da_nhan: list[list[BaseMessage]] = Field(default_factory=list)
+
+    @property
+    def _llm_type(self) -> str:
+        return "kiem-chung-theo-luat"
+
+    def bind_tools(self, tools: Any, **tuy_chon: Any) -> "KiemChungTheoLuat":
+        return self
+
+    def bat(self, chi_tiet: str, li_do: str) -> None:
+        """Tin nào có `chi_tiet` trong tiêu đề hay tóm tắt thì không đạt, với lí do `li_do`."""
+        self.sai[chi_tiet] = li_do
+
+    def se(self, *buoc: AIMessage | BaseException) -> None:
+        self.kich_ban = list(buoc)
+
+    def tin_da_xet(self) -> list[str]:
+        """Tiêu đề của Tin ở từng lời gọi, theo thứ tự."""
+        return [_tin_dang_xet(tin_nhan)["tieu_de"] for tin_nhan in self.da_nhan]
+
+    def van_ban_da_nhan(self, lan_goi: int = -1) -> str:
+        return "\n".join(str(tin_nhan.content) for tin_nhan in self.da_nhan[lan_goi])
+
+    def _generate(
+        self, messages: list[BaseMessage], stop: Any = None, run_manager: Any = None, **_: Any
+    ) -> ChatResult:
+        self.da_nhan.append(list(messages))
+        if self.kich_ban:
+            buoc = self.kich_ban.pop(0)
+            if isinstance(buoc, BaseException):
+                raise buoc
+            return ChatResult(generations=[ChatGeneration(message=buoc)])
+        tin = _tin_dang_xet(messages)
+        noi_dung = f"{tin['tieu_de']}\n{tin['tom_tat']}"
+        li_do = [li_do for chi_tiet, li_do in self.sai.items() if chi_tiet in noi_dung]
+        return ChatResult(
+            generations=[ChatGeneration(message=ket_luan(not li_do, "; ".join(li_do)))]
+        )
+
+
+def _tin_dang_xet(tin_nhan: Sequence[BaseMessage]) -> dict[str, str]:
+    """Tin Kiểm chứng được giao: dòng JSON cuối cùng của đề bài."""
+    de_bai = next(str(tn.content) for tn in tin_nhan if isinstance(tn, HumanMessage))
+    tin: dict[str, str] = json.loads(de_bai.splitlines()[-1])
+    return tin
+
+
 HUONG_DAN_MAC_DINH = "Chọn Tin đáng đọc nhất."
+HUONG_DAN_KIEM_CHUNG_MAC_DINH = "Đối chiếu số liệu, tên và ngày tháng với Bài gốc."
 
 
 @dataclass
@@ -308,6 +394,7 @@ class TheGioi:
     noi_dung: NoiDungGia = field(default_factory=NoiDungGia)
     tim_kiem: TimKiemGia = field(default_factory=TimKiemGia)
     llm: LLMTheoKichBan = field(default_factory=LLMTheoKichBan)
+    kiem_chung: KiemChungTheoLuat = field(default_factory=KiemChungTheoLuat)
     chay_ky: ChayKy = field(init=False)
 
     def __post_init__(self) -> None:
@@ -316,8 +403,11 @@ class TheGioi:
             bo_thu_thap={LoaiNguon.RSS: self.nguon},
             bo_phat={LoaiKenhDang.TELEGRAM: self.kenh_dang},
             lay_noi_dung=self.noi_dung,
-            bien_tap=BienTap(self.llm, self.tim_kiem, self.kho_trang_thai),
+            bien_tap=BienTap(
+                self.llm, KiemChung(self.kiem_chung), self.tim_kiem, self.kho_trang_thai
+            ),
         )
+        self.doi_huong_dan_kiem_chung(HUONG_DAN_KIEM_CHUNG_MAC_DINH)
 
     def them_chuyen_muc(
         self,
@@ -351,27 +441,43 @@ class TheGioi:
 
     def doi_huong_dan(self, ma_chuyen_muc: str, noi_dung: str) -> int:
         """Đặt một phiên bản Hướng dẫn mới của Biên tập có hiệu lực; trả về số phiên bản."""
-        with self.mo_phien.begin() as phien:
+        with self.mo_phien() as phien:
             chuyen_muc_id = phien.scalars(
                 select(ChuyenMuc.id).where(ChuyenMuc.ma == ma_chuyen_muc)
             ).one()
-            cua_chuyen_muc = (
-                HuongDan.vai_tro == VaiTro.BIEN_TAP,
-                HuongDan.chuyen_muc_id == chuyen_muc_id,
+        return self._doi_huong_dan(VaiTro.BIEN_TAP, chuyen_muc_id, noi_dung)
+
+    def doi_huong_dan_kiem_chung(self, noi_dung: str | None) -> int:
+        """Đặt một phiên bản Hướng dẫn chung mới của Kiểm chứng có hiệu lực; trả về số phiên bản.
+
+        None là không còn phiên bản nào có hiệu lực.
+        """
+        return self._doi_huong_dan(VaiTro.KIEM_CHUNG, None, noi_dung)
+
+    def _doi_huong_dan(
+        self, vai_tro: VaiTro, chuyen_muc_id: int | None, noi_dung: str | None
+    ) -> int:
+        with self.mo_phien.begin() as phien:
+            cung_loai = (
+                HuongDan.vai_tro == vai_tro,
+                HuongDan.chuyen_muc_id.is_(None)
+                if chuyen_muc_id is None
+                else HuongDan.chuyen_muc_id == chuyen_muc_id,
             )
             phien_ban = (
-                phien.scalar(select(func.max(HuongDan.phien_ban)).where(*cua_chuyen_muc)) or 0
+                phien.scalar(select(func.max(HuongDan.phien_ban)).where(*cung_loai)) or 0
             ) + 1
-            phien.execute(update(HuongDan).where(*cua_chuyen_muc).values(co_hieu_luc=False))
-            phien.add(
-                HuongDan(
-                    vai_tro=VaiTro.BIEN_TAP,
-                    chuyen_muc_id=chuyen_muc_id,
-                    phien_ban=phien_ban,
-                    noi_dung=noi_dung,
-                    co_hieu_luc=True,
+            phien.execute(update(HuongDan).where(*cung_loai).values(co_hieu_luc=False))
+            if noi_dung is not None:
+                phien.add(
+                    HuongDan(
+                        vai_tro=vai_tro,
+                        chuyen_muc_id=chuyen_muc_id,
+                        phien_ban=phien_ban,
+                        noi_dung=noi_dung,
+                        co_hieu_luc=True,
+                    )
                 )
-            )
             return phien_ban
 
     def tinh_trang_nguon(self) -> dict[str, str | None]:
@@ -391,11 +497,41 @@ class TheGioi:
             ).one()
 
     def tin_da_luu(self) -> list[tuple[str, str, str, str]]:
-        """Mọi Tin đã lưu theo thứ tự: tiêu đề, tóm tắt, lí do chọn, địa chỉ Bài gốc chính."""
+        """Các Tin đã lưu mà không bị bỏ, theo thứ tự: tiêu đề, tóm tắt, lí do chọn, địa chỉ Bài
+        gốc chính."""
         with self.mo_phien() as phien:
             return [
                 (tin.tieu_de, tin.tom_tat, tin.li_do, tin.bai_goc_chinh.dia_chi)
-                for tin in phien.scalars(select(Tin).order_by(Tin.ban_tin_id, Tin.thu_tu))
+                for tin in phien.scalars(
+                    select(Tin).where(Tin.li_do_bo.is_(None)).order_by(Tin.ban_tin_id, Tin.thu_tu)
+                )
+            ]
+
+    def tin_bi_bo(self) -> list[tuple[str, str, str | None]]:
+        """Các Tin đã lưu nhưng bị bỏ khỏi Bản tin: tiêu đề, địa chỉ Bài gốc chính, lí do bỏ."""
+        with self.mo_phien() as phien:
+            return [
+                (tin.tieu_de, tin.bai_goc_chinh.dia_chi, tin.li_do_bo)
+                for tin in phien.scalars(
+                    select(Tin)
+                    .where(Tin.li_do_bo.is_not(None))
+                    .order_by(Tin.ban_tin_id, Tin.thu_tu)
+                )
+            ]
+
+    def luot_kiem_chung(self, dia_chi: str) -> list[tuple[str, str, bool, str]]:
+        """Các lượt Kiểm chứng đã lưu của Tin về Bài gốc ở `dia_chi`, theo thứ tự: tiêu đề và tóm
+        tắt được xét, đạt hay không, lí do."""
+        with self.mo_phien() as phien:
+            return [
+                (luot.tieu_de, luot.tom_tat, luot.dat, luot.li_do)
+                for luot in phien.scalars(
+                    select(LuotKiemChung)
+                    .join(Tin)
+                    .join(BaiGoc, Tin.bai_goc_chinh_id == BaiGoc.id)
+                    .where(BaiGoc.dia_chi_chuan_hoa == chuan_hoa(dia_chi))
+                    .order_by(LuotKiemChung.tin_id, LuotKiemChung.lan)
+                )
             ]
 
 

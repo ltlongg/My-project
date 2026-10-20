@@ -28,11 +28,24 @@ có gì mới, tin giải trí, và hai Tin cùng nói về một sự kiện.
 
 Giọng văn: trung tính, đi thẳng vào việc, không giật tít, không bình luận thêm. Câu đầu của tóm \
 tắt nói ngay điều gì đã xảy ra."""
+# Bản tạm, chung cho mọi Chuyên mục; ticket 14 soạn Hướng dẫn khởi đầu đầy đủ.
+HUONG_DAN_KIEM_CHUNG = """\
+Đối chiếu từng chi tiết của tiêu đề và tóm tắt với toàn văn Bài gốc:
+- Số liệu: con số, đơn vị, tỉ lệ, tiền tệ, và con số đó đo cái gì.
+- Tên: người, tổ chức, sản phẩm, model, địa danh; ai làm gì, ai nói gì.
+- Ngày tháng và thời gian: khi nào việc xảy ra, việc đã xảy ra hay mới là dự kiến.
+- Tiêu đề không nói quá Bài gốc: không biến dự kiến thành sự thật, khả năng thành chắc chắn, một \
+trường hợp thành xu hướng; không thêm "đầu tiên", "lớn nhất", "chấn động" khi Bài gốc không nói.
+- Không có chi tiết nào ngoài Bài gốc, và bản dịch giữ đúng nghĩa.
+
+Không đạt khi có ít nhất một chi tiết sai, không có căn cứ trong Bài gốc, hoặc tiêu đề nói quá. \
+Đạt khi mọi chi tiết đều có căn cứ; văn phong vụng, thiếu một chi tiết phụ hay cách chọn ý không \
+phải lí do để không đạt."""
 
 
 def khoi_tao(mo_phien: sessionmaker[Session], ma_tro_chuyen_telegram: str | None) -> None:
-    """Tạo Chuyên mục công nghệ với một Nguồn RSS, Hướng dẫn cho Biên tập và, nếu đã biết mã
-    nhóm, một Kênh đăng Telegram.
+    """Tạo Chuyên mục công nghệ với một Nguồn RSS, Hướng dẫn cho Biên tập, Hướng dẫn chung cho
+    Kiểm chứng và, nếu đã biết mã nhóm, một Kênh đăng Telegram.
 
     Chạy lại không tạo trùng và không ghi đè thứ đã có; chỉ bổ sung thứ còn thiếu.
     """
@@ -62,6 +75,21 @@ def khoi_tao(mo_phien: sessionmaker[Session], ma_tro_chuyen_telegram: str | None
                     chuyen_muc_id=chuyen_muc.id,
                     phien_ban=1,
                     noi_dung=HUONG_DAN_BIEN_TAP_CONG_NGHE,
+                    co_hieu_luc=True,
+                )
+            )
+        da_co_huong_dan_kiem_chung = phien.scalar(
+            select(HuongDan.id)
+            .where(HuongDan.vai_tro == VaiTro.KIEM_CHUNG, HuongDan.chuyen_muc_id.is_(None))
+            .limit(1)
+        )
+        if not da_co_huong_dan_kiem_chung:
+            phien.add(
+                HuongDan(
+                    vai_tro=VaiTro.KIEM_CHUNG,
+                    chuyen_muc_id=None,
+                    phien_ban=1,
+                    noi_dung=HUONG_DAN_KIEM_CHUNG,
                     co_hieu_luc=True,
                 )
             )
