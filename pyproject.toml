@@ -8,9 +8,14 @@ dependencies = [
     "alembic>=1.14",
     "feedparser>=6.0.11",
     "httpx>=0.28",
+    "langchain-core>=1.0,<2.0",
+    "langchain-openai>=1.0,<2.0",
+    "langgraph>=1.0,<2.0",
+    "langgraph-checkpoint-postgres>=3.0",
     "psycopg[binary]>=3.2",
     "pydantic-settings>=2.7",
     "sqlalchemy>=2.0.36",
+    "trafilatura>=2.0",
     "tzdata>=2024.2",
 ]
 

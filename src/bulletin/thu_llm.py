@@ -14,6 +14,8 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from bulletin.tieng_viet import la_tieng_viet
+
 # Tên và nhãn các phép thử trên từng model, theo thứ tự chạy và thứ tự cột trong báo cáo.
 PHEP_THU = {
     "goi_thuong": "Gọi thường",
@@ -394,9 +396,6 @@ DOAN_TIENG_ANH = (
     "Blackwell generation."
 )
 TEN_PHAI_GIU = ("Nvidia", "Rubin", "GPU", "TSMC", "Blackwell")
-CHU_CO_DAU = set("ăâđêôơưàảãáạằẳẵắặầẩẫấậèẻẽéẹềểễếệìỉĩíịòỏõóọồổỗốộờởỡớợùủũúụừửữứựỳỷỹýỵ")
-# Văn bản tiếng Việt có khoảng một phần năm chữ cái mang dấu; tiếng Anh thì không có chữ nào.
-TI_LE_CHU_CO_DAU_TOI_THIEU = 0.08
 
 
 def _tieng_viet(endpoint: EndpointLLM, model: str) -> KetQuaThu:
@@ -410,10 +409,7 @@ def _tieng_viet(endpoint: EndpointLLM, model: str) -> KetQuaThu:
         ),
     ).noi_dung.strip()
     thieu = [ten for ten in TEN_PHAI_GIU if ten not in tom_tat]
-    chu_cai = [chu for chu in tom_tat.lower() if chu.isalpha()]
-    co_dau = sum(chu in CHU_CO_DAU for chu in chu_cai)
-    la_tieng_viet = co_dau >= TI_LE_CHU_CO_DAU_TOI_THIEU * max(len(chu_cai), 1)
-    dat = la_tieng_viet and not thieu and "30" in tom_tat
+    dat = la_tieng_viet(tom_tat) and not thieu and "30" in tom_tat
     return KetQuaThu(dat, " ".join(tom_tat.split()))
 
 

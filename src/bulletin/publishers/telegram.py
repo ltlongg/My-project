@@ -5,10 +5,10 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from bulletin.publishers import NoiDungBanTin
+from bulletin.publishers import NoiDungBanTin, do_dai
 
 GIO_VIET_NAM = ZoneInfo("Asia/Ho_Chi_Minh")
-# Giới hạn của Telegram cho một tin nhắn chữ, tính theo đơn vị UTF-16.
+# Giới hạn của Telegram cho một tin nhắn chữ.
 GIOI_HAN_TIN_NHAN = 4096
 TIEU_DE_TOI_DA = 300
 
@@ -60,16 +60,15 @@ def dung_tin_nhan(ban_tin: NoiDungBanTin) -> list[str]:
         tieu_de = tin.tieu_de
         if len(tieu_de) > TIEU_DE_TOI_DA:
             tieu_de = tieu_de[: TIEU_DE_TOI_DA - 1] + "…"
-        cac_doan.append(f'{thu_tu}. <a href="{escape(tin.dia_chi)}">{escape(tieu_de)}</a>')
+        cac_doan.append(
+            f'{thu_tu}. <a href="{escape(tin.dia_chi)}"><b>{escape(tieu_de)}</b></a>\n'
+            f"{escape(tin.tom_tat)}"
+        )
 
     tin_nhan: list[str] = []
     for doan in cac_doan:
-        if tin_nhan and _do_dai(tin_nhan[-1]) + 2 + _do_dai(doan) <= GIOI_HAN_TIN_NHAN:
+        if tin_nhan and do_dai(tin_nhan[-1]) + 2 + do_dai(doan) <= GIOI_HAN_TIN_NHAN:
             tin_nhan[-1] += "\n\n" + doan
         else:
             tin_nhan.append(doan)
     return tin_nhan
-
-
-def _do_dai(van_ban: str) -> int:
-    return len(van_ban.encode("utf-16-le")) // 2

@@ -35,7 +35,7 @@ Bộ thử chỉ cho biết model **làm được gì**, không so được mode
 | **Kiểm chứng** | `ds/deepseek-v4-pro` | Khác nhà cung cấp với **Biên tập**, để người soát không mắc cùng lỗi với người viết |
 | Cải tiến | `cx/gpt-5.6-luna` | Chưa có căn cứ để chọn khác **Biên tập** |
 
-Đề xuất tên biến cho ticket 04: `MODEL_SO_TUYEN`, `MODEL_BIEN_TAP`, `MODEL_KIEM_CHUNG`, `MODEL_CAI_TIEN`; biến nào trống thì dùng `MODEL`.
+Mỗi vai trò có một biến riêng, trống thì dùng `MODEL`. Ticket 04 đã thêm `MODEL_BIEN_TAP`; `MODEL_SO_TUYEN`, `MODEL_KIEM_CHUNG` và `MODEL_CAI_TIEN` được thêm khi vai trò đó có code.
 
 ## Điều code phải tính tới
 

@@ -7,13 +7,13 @@ import pytest
 from bulletin.collectors import BaiGocMoi
 from bulletin.mo_hinh import KetQuaKy
 from bulletin.publishers import NoiDungBanTin, NoiDungTin
-from tests.conftest import TheGioi, luc
+from tests.conftest import TheGioi, TinViet, doc, luc, nop
 
 RSS = "https://bao.example/rss"
 KENH_DANG = "-1001"
 
 
-def test_ky_phat_ban_tin_gom_tieu_de_va_link_cua_bai_goc_moi(the_gioi: TheGioi) -> None:
+def test_ky_phat_ban_tin_gom_cac_tin_ve_bai_goc_moi_kem_link(the_gioi: TheGioi) -> None:
     the_gioi.them_chuyen_muc("cong-nghe", ten="Công nghệ", nguon=[RSS], kenh_dang=[KENH_DANG])
     the_gioi.nguon.co(
         RSS,
@@ -31,8 +31,8 @@ def test_ky_phat_ban_tin_gom_tieu_de_va_link_cua_bai_goc_moi(the_gioi: TheGioi) 
                 chuyen_muc="Công nghệ",
                 thoi_diem=luc(7, 8),
                 tin=(
-                    NoiDungTin("Bài B", "https://bao.example/b"),
-                    NoiDungTin("Bài A", "https://bao.example/a"),
+                    NoiDungTin("Bài B", "Tóm tắt của Bài B.", "https://bao.example/b"),
+                    NoiDungTin("Bài A", "Tóm tắt của Bài A.", "https://bao.example/a"),
                 ),
             ),
         )
@@ -164,24 +164,6 @@ def test_moi_nguon_deu_loi_thi_ky_hong(the_gioi: TheGioi) -> None:
     assert the_gioi.kenh_dang.da_nhan == []
 
 
-def test_ban_tin_chi_gom_so_tin_toi_da_cua_chuyen_muc_uu_tien_bai_moi_nhat(
-    the_gioi: TheGioi,
-) -> None:
-    the_gioi.them_chuyen_muc(
-        "cong-nghe", ten="Công nghệ", nguon=[RSS], kenh_dang=[KENH_DANG], so_tin_toi_da=2
-    )
-    the_gioi.nguon.co(
-        RSS,
-        BaiGocMoi("https://bao.example/1", "Bài lúc 5 giờ", luc(7, 5)),
-        BaiGocMoi("https://bao.example/2", "Bài lúc 7 giờ", luc(7, 7)),
-        BaiGocMoi("https://bao.example/3", "Bài lúc 6 giờ", luc(7, 6)),
-    )
-
-    the_gioi.chay_ky.chay("cong-nghe", luc(7, 8))
-
-    assert tieu_de_da_phat(the_gioi) == [["Bài lúc 7 giờ", "Bài lúc 6 giờ"]]
-
-
 def test_hai_ky_lien_tiep_khong_luu_trung_bai_goc(the_gioi: TheGioi) -> None:
     the_gioi.them_chuyen_muc("cong-nghe", ten="Công nghệ", nguon=[RSS], kenh_dang=[KENH_DANG])
     the_gioi.nguon.co(
@@ -253,11 +235,12 @@ def test_thoi_diem_khong_co_mui_gio_bi_tu_choi(the_gioi: TheGioi) -> None:
 
 
 def test_loi_khong_luong_truoc_van_de_lai_mot_ky_hong_kem_li_do(the_gioi: TheGioi) -> None:
-    # Số Tin tối đa âm làm Postgres từ chối câu truy vấn chọn Bài gốc.
-    the_gioi.them_chuyen_muc(
-        "cong-nghe", ten="Công nghệ", nguon=[RSS], kenh_dang=[KENH_DANG], so_tin_toi_da=-1
-    )
+    the_gioi.them_chuyen_muc("cong-nghe", ten="Công nghệ", nguon=[RSS], kenh_dang=[KENH_DANG])
+    # Tiêu đề chứa ký tự NUL làm Postgres từ chối lưu Tin.
     the_gioi.nguon.co(RSS, BaiGocMoi("https://bao.example/a", "Bài A", luc(7, 7)))
+    the_gioi.llm.se(
+        doc("https://bao.example/a"), nop(TinViet("https://bao.example/a", "Bài\x00 A"))
+    )
 
     ky = the_gioi.chay_ky.chay("cong-nghe", luc(7, 8))
 

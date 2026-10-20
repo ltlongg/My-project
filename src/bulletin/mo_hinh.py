@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, Table, UniqueConstraint
+from sqlalchemy import Column, DateTime, Enum, ForeignKey, Index, Table, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -21,6 +21,12 @@ class KetQuaKy(StrEnum):
     DA_PHAT = "da_phat"
     KHONG_PHAT = "khong_phat"
     HONG = "hong"
+
+
+class VaiTro(StrEnum):
+    """Agent mà một Hướng dẫn chỉ dẫn."""
+
+    BIEN_TAP = "bien_tap"
 
 
 def _cot_enum(loai: type[StrEnum]) -> Enum:
@@ -100,6 +106,39 @@ class BaiGoc(CoSo):
     tieu_de: Mapped[str]
     xuat_hien_luc: Mapped[datetime] = mapped_column(index=True)
     thu_thap_luc: Mapped[datetime]
+    # Chưa có nghĩa là chưa ai cần đọc Bài gốc này, hoặc không lấy được nội dung.
+    toan_van: Mapped[str | None]
+
+    nguon: Mapped[list[Nguon]] = relationship(secondary=bai_goc_nguon, order_by="Nguon.id")
+
+
+class HuongDan(CoSo):
+    __tablename__ = "huong_dan"
+    __table_args__ = (
+        UniqueConstraint(
+            "vai_tro", "chuyen_muc_id", "phien_ban", postgresql_nulls_not_distinct=True
+        ),
+        # Mỗi Agent, mỗi Chuyên mục chỉ có một phiên bản đang có hiệu lực.
+        Index(
+            "uq_huong_dan_co_hieu_luc",
+            "vai_tro",
+            "chuyen_muc_id",
+            unique=True,
+            postgresql_where="co_hieu_luc",
+            postgresql_nulls_not_distinct=True,
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    vai_tro: Mapped[VaiTro] = mapped_column(_cot_enum(VaiTro))
+    # Để trống là Hướng dẫn chung cho mọi Chuyên mục.
+    chuyen_muc_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chuyen_muc.id", ondelete="CASCADE")
+    )
+    phien_ban: Mapped[int]
+    noi_dung: Mapped[str]
+    co_hieu_luc: Mapped[bool]
+    tao_luc: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
 class Ky(CoSo):
@@ -111,8 +150,11 @@ class Ky(CoSo):
     # Chưa có kết quả nghĩa là Kỳ đang chạy hoặc bị gián đoạn giữa chừng.
     ket_qua: Mapped[KetQuaKy | None] = mapped_column(_cot_enum(KetQuaKy))
     li_do: Mapped[str | None]
+    # Phiên bản Hướng dẫn mà Biên tập dùng ở Kỳ này.
+    huong_dan_bien_tap_id: Mapped[int | None] = mapped_column(ForeignKey("huong_dan.id"))
 
     chuyen_muc: Mapped[ChuyenMuc] = relationship()
+    huong_dan_bien_tap: Mapped[HuongDan | None] = relationship()
     ban_tin: Mapped[BanTin | None] = relationship(back_populates="ky")
 
 
@@ -134,6 +176,9 @@ class Tin(CoSo):
     ban_tin_id: Mapped[int] = mapped_column(ForeignKey("ban_tin.id"))
     thu_tu: Mapped[int]
     tieu_de: Mapped[str]
+    tom_tat: Mapped[str]
+    # Vì sao Biên tập chọn Tin này.
+    li_do: Mapped[str]
     bai_goc_chinh_id: Mapped[int] = mapped_column(ForeignKey("bai_goc.id"))
 
     ban_tin: Mapped[BanTin] = relationship(back_populates="tin")
