@@ -6,7 +6,7 @@ Vòng agent viết bằng LangGraph theo ADR 0001; model theo kết quả ticket
 
 **Blocked by:** 02, 03
 
-**Status:** ready-for-human
+**Status:** done
 
 - [x] Toàn văn của một **Bài gốc** loại bài báo được trích ra và lưu lại
 - [x] **Biên tập** có công cụ đọc toàn văn một **Bài gốc** và công cụ tìm kiếm web; công cụ tìm kiếm thay được giữa Tavily và Brave
@@ -50,3 +50,5 @@ Ghi chú cho các ticket sau:
 - Ticket 12: chưa ghi vết lên Langfuse.
 - Ticket 27: trạng thái của vòng agent nằm trong ba bảng `checkpoints`, `checkpoint_blobs`, `checkpoint_writes` do LangGraph tự tạo (ngoài Alembic, tạo trong `nang_cap`), theo mã `ky-<id>-bien-tap`. Chúng chứa cả toàn văn đã đọc và chưa có gì dọn.
 - Không lấy được toàn văn một **Bài gốc** thì **Biên tập** được báo và chọn bài khác; lỗi đó chưa được lưu theo **Bài gốc**.
+
+**2026-10-20, agent.** Đã chạy thật trên cơ sở dữ liệu phát triển: `uv run bulletin chay-ky cong-nghe` kết thúc "Đã phát" với 5 **Tin** tiếng Việt gửi vào nhóm Telegram thử, đọc toàn văn 7 **Bài gốc**, khoảng 30 giây; tên riêng giữ nguyên (DHS, Claude Code, Apollo Research, Petal, NorthPoint Development). Chủ hệ thống chọn đóng ticket và chấp nhận các quyết định ở trên. Lần chạy ngay trước đó hỏng vì proxy LLM trên máy chưa bật ("Connection error"): **Kỳ** được ghi là hỏng, không có gì được phát, đúng như mong đợi; ticket 09 sẽ lo phần thử lại.
