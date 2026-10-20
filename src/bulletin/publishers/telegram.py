@@ -57,7 +57,7 @@ def dung_tin_nhan(ban_tin: NoiDungBanTin) -> list[str]:
     ngay = ban_tin.thoi_diem.astimezone(GIO_VIET_NAM).strftime("%d/%m/%Y")
     cac_doan = [f"<b>Bản tin {escape(ban_tin.chuyen_muc)}</b> · {ngay}"]
     for thu_tu, tin in enumerate(ban_tin.tin, start=1):
-        tieu_de = tin.tieu_de
+        tieu_de = tin.tieu_de_kem_nhan
         if len(tieu_de) > TIEU_DE_TOI_DA:
             tieu_de = tieu_de[: TIEU_DE_TOI_DA - 1] + "…"
         cac_doan.append(

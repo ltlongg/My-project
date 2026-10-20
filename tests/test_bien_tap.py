@@ -296,15 +296,18 @@ def test_chuyen_muc_chua_co_huong_dan_cho_bien_tap_thi_ky_hong_kem_li_do(
     assert the_gioi.llm.da_nhan == []
 
 
-def test_bien_tap_chi_nhan_30_bai_goc_moi_nhat(the_gioi: TheGioi) -> None:
+def test_bien_tap_chi_nhan_30_ung_vien_moi_nhat(the_gioi: TheGioi) -> None:
     mot_chuyen_muc(the_gioi, *(f"https://bao.example/{so}" for so in range(35)))
+    # Hai Bài gốc mới nhất là một sự kiện, nên 30 ứng viên gồm 31 Bài gốc.
+    the_gioi.nhung.cung_su_kien("Original headline 0", "Original headline 1")
     the_gioi.llm.se(doc("https://bao.example/0"), nop(TinViet("https://bao.example/0")))
 
     the_gioi.chay_ky.chay("cong-nghe", luc(7, 8))
 
+    assert len(the_gioi.llm.ung_vien_da_thay()) == 30
     de_bai = the_gioi.llm.van_ban_da_nhan(0)
-    assert '"https://bao.example/29"' in de_bai
-    assert '"https://bao.example/30"' not in de_bai
+    assert '"https://bao.example/30"' in de_bai
+    assert '"https://bao.example/31"' not in de_bai
 
 
 class MatDien(BaseException):

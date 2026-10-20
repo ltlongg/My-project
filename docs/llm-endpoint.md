@@ -49,4 +49,4 @@ Mỗi vai trò có một biến riêng, trống thì dùng `MODEL`. Ticket 04 đ
 
 ## Model nhúng tự chạy
 
-Chọn `BAAI/bge-m3`: đa ngôn ngữ (có tiếng Việt), vector 1.024 chiều, giấy phép MIT, chạy được trên CPU với vài trăm **Bài gốc** mỗi ngày. Nếu server thiếu RAM thì lùi về `intfloat/multilingual-e5-small` (384 chiều). Lựa chọn dựa trên đặc tính đã công bố của hai model, chưa chạy thử; ticket 06 kiểm lại khi gom **Tin**.
+Chọn `BAAI/bge-m3`: đa ngôn ngữ (có tiếng Việt), vector 1.024 chiều, giấy phép MIT, chạy được trên CPU với vài trăm **Bài gốc** mỗi ngày. Nếu server thiếu RAM thì lùi về `intfloat/multilingual-e5-small` (384 chiều). Lựa chọn dựa trên đặc tính đã công bố của hai model. Ticket 06 đã chạy thử `bge-m3` trên RSS thật và giữ lựa chọn này; số đo, ngưỡng gom và tài nguyên cần có ở `docs/gom-tin.md`.

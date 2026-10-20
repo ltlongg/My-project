@@ -14,6 +14,8 @@ class BaiGocMoi:
     tieu_de: str
     # Nguồn không cho biết thời điểm xuất bản thì để trống.
     xuat_ban_luc: datetime | None = None
+    # Đoạn mô tả ngắn Nguồn kèm theo, dạng chữ thuần; không có thì để trống.
+    mo_ta: str | None = None
 
 
 class BoThuThap(Protocol):

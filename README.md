@@ -3,8 +3,9 @@
 Hệ thống cá nhân thu thập tin tức, chọn lọc, tóm tắt sang tiếng Việt và phát thành bản tin định kỳ.
 Thuật ngữ ở [CONTEXT.md](CONTEXT.md); spec và ticket ở `.scratch/ban-tin-tu-dong/`.
 
-Hiện có: một lệnh chạy một **Kỳ** cho một **Chuyên mục**. Nó lấy **Bài gốc** từ **Nguồn** RSS, để
-agent **Biên tập** đọc toàn văn, chọn và viết các **Tin** bằng tiếng Việt theo **Hướng dẫn** của
+Hiện có: một lệnh chạy một **Kỳ** cho một **Chuyên mục**. Nó lấy **Bài gốc** từ **Nguồn** RSS, gom
+những **Bài gốc** cùng nói về một sự kiện thành một ứng viên **Tin** và đánh dấu ứng viên trùng với
+**Tin** đã phát, để agent **Biên tập** đọc toàn văn, chọn và viết các **Tin** bằng tiếng Việt theo **Hướng dẫn** của
 **Chuyên mục**, để agent **Kiểm chứng** đối chiếu từng **Tin** với **Bài gốc** (**Tin** không đạt được
 viết lại tối đa hai lần rồi bị bỏ), rồi gửi **Bản tin** vào **Kênh đăng** Telegram. Còn dưới ba
 **Tin** qua **Kiểm chứng** thì **Bản tin** không được phát.
@@ -14,11 +15,14 @@ viết lại tối đa hai lần rồi bị bỏ), rồi gửi **Bản tin** và
 Cần [Docker](https://docs.docker.com/get-docker/) và [uv](https://docs.astral.sh/uv/).
 
 ```sh
-docker compose up -d --wait    # Postgres ở 127.0.0.1:54320
+docker compose up -d --wait    # Postgres ở 127.0.0.1:54320, model nhúng ở 127.0.0.1:54321
 uv sync
 bash scripts/setup-keys.sh     # dẫn từng bước lấy khoá và tài khoản, ghi vào .env
 uv run bulletin khoi-tao       # tạo bảng, nạp Chuyên mục công nghệ, Nguồn RSS, Hướng dẫn, Kênh đăng
 ```
+
+Lần đầu, dịch vụ `nhung` tải khoảng 2,3 GB model `BAAI/bge-m3`; khi chạy nó cần khoảng 3,2 GB RAM
+trong Docker (xem [docs/gom-tin.md](docs/gom-tin.md)).
 
 `scripts/setup-keys.sh` chạy bằng Git Bash trên Windows và chạy lại được: giá trị đã có được giữ khi
 nhấn Enter. Muốn điền tay thì sao chép `.env.example` thành `.env`.
@@ -35,7 +39,9 @@ Lệnh in ra kết quả của **Kỳ** (đã phát, không phát hoặc hỏng 
 **Biên tập** và **Kiểm chứng** gọi endpoint LLM (`OPENAI_BASE_URL`, `OPENAI_API_KEY`) bằng model ở
 `MODEL_BIEN_TAP` và `MODEL_KIEM_CHUNG`, để trống thì dùng `MODEL`. Nên đặt hai model của hai nhà
 cung cấp khác nhau (xem [docs/llm-endpoint.md](docs/llm-endpoint.md)). Công cụ tìm kiếm web của
-**Biên tập** là Tavily; đặt `CONG_CU_TIM_KIEM=brave` để đổi sang Brave.
+**Biên tập** là Tavily; đặt `CONG_CU_TIM_KIEM=brave` để đổi sang Brave. Vector nhúng để gom **Tin**
+lấy từ dịch vụ `nhung` trong `compose.yaml`, vì endpoint LLM không tạo được vector nhúng; đổi bằng
+`NHUNG_BASE_URL` và `MODEL_NHUNG`.
 
 Trạng thái của **Biên tập** và các kết luận của **Kiểm chứng** được lưu sau từng bước. **Kỳ** bị dừng giữa chừng (mất điện, tắt tiến
 trình) thì chạy tiếp từ bước đang dở, không đọc lại những **Bài gốc** đã đọc:
@@ -74,6 +80,9 @@ uv run ruff format   # định dạng
 
 - `src/bulletin/chay_ky.py`: lối vào duy nhất "chạy một **Kỳ** cho **Chuyên mục** này tại thời điểm này".
 - `src/bulletin/collectors/`: giao diện chung của bộ thu thập và bộ thu thập RSS.
+- `src/bulletin/gom_tin.py`: gom **Bài gốc** cùng sự kiện thành ứng viên **Tin**, đối chiếu với
+  **Tin** đã phát.
+- `src/bulletin/embeddings/`: giao diện chung của bộ nhúng và bộ nhúng qua endpoint `/embeddings`.
 - `src/bulletin/extractors/`: giao diện chung của bộ lấy nội dung và bộ trích thân bài báo.
 - `src/bulletin/agents/`: vòng agent viết bằng LangGraph: **Biên tập**, và **Kiểm chứng** xét
   từng **Tin** nó nộp.
@@ -82,5 +91,5 @@ uv run ruff format   # định dạng
 - `src/bulletin/thu_llm.py`: bộ thử endpoint LLM.
 - `src/bulletin/mo_hinh.py`, `src/bulletin/migrations/`: các bảng và migration (Alembic).
 - `tests/conftest.py`: khuôn test tại điểm "Chạy Kỳ" (**Nguồn** giả, **Kênh đăng** giả, LLM trả lời
-  theo kịch bản, đồng hồ giả).
+  theo kịch bản, bộ nhúng giả, đồng hồ giả).
 - `tests/fixtures/`: phản hồi mẫu cho test của từng bộ nối ra bên ngoài.

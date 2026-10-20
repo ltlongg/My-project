@@ -1,13 +1,19 @@
 """Bộ thu thập cho Nguồn loại RSS (đọc được cả RSS và Atom)."""
 
+import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from html import unescape
 from time import struct_time
 
 import feedparser
 import httpx
 
 from bulletin.collectors import BaiGocMoi
+
+# Mô tả dài hơn thì cắt; phần đầu là đủ để biết bài nói về chuyện gì.
+MO_TA_TOI_DA = 500
+THE_HTML = re.compile(r"<[^>]+>")
 
 
 class LoiThuThapRss(Exception):
@@ -35,14 +41,25 @@ class ThuThapRss:
 
         bai_goc = []
         for muc in feed.entries:
-            link, tieu_de = muc.get("link"), " ".join(muc.get("title", "").split())
+            link, tieu_de = muc.get("link"), _chu_thuan(muc.get("title", ""))
             if not link or not tieu_de:
                 continue
             xuat_ban_luc = _thoi_diem(muc.get("published_parsed") or muc.get("updated_parsed"))
             # Mục không ghi giờ xuất bản thì không biết cũ hay mới; để nơi gọi quyết định.
             if xuat_ban_luc is None or xuat_ban_luc > tu_moc:
-                bai_goc.append(BaiGocMoi(dia_chi=link, tieu_de=tieu_de, xuat_ban_luc=xuat_ban_luc))
+                mo_ta = _chu_thuan(muc.get("summary", ""))[:MO_TA_TOI_DA].strip() or None
+                bai_goc.append(
+                    BaiGocMoi(dia_chi=link, tieu_de=tieu_de, xuat_ban_luc=xuat_ban_luc, mo_ta=mo_ta)
+                )
         return bai_goc
+
+
+def _chu_thuan(van_ban: str) -> str:
+    """Bỏ thẻ HTML, giải mã thực thể HTML và gộp khoảng trắng.
+
+    Có Nguồn để thực thể HTML trong CDATA, nên feedparser trả về nguyên "h&agrave;ng".
+    """
+    return " ".join(unescape(THE_HTML.sub(" ", van_ban)).split())
 
 
 def _thoi_diem(gio_utc: struct_time | None) -> datetime | None:

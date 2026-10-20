@@ -1,10 +1,11 @@
-"""Khuôn test tại điểm "Chạy Kỳ": Nguồn giả, Kênh đăng giả, LLM theo kịch bản, đồng hồ giả,
-Postgres thật.
+"""Khuôn test tại điểm "Chạy Kỳ": Nguồn giả, Kênh đăng giả, LLM theo kịch bản, bộ nhúng giả,
+đồng hồ giả, Postgres thật.
 
 Đồng hồ giả là tham số `thoi_diem` của `ChayKy.chay`: test tự nói "bây giờ" là lúc nào.
 """
 
 import json
+import math
 import os
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -39,6 +40,7 @@ from bulletin.mo_hinh import (
     LuotKiemChung,
     Nguon,
     Tin,
+    UngVien,
     VaiTro,
 )
 from bulletin.publishers import NoiDungBanTin
@@ -165,13 +167,68 @@ class TimKiemGia:
         return self.ket_qua
 
 
+class NhungGia:
+    """Bộ nhúng giả: tiêu đề nào test đã đặt toạ độ thì nhận vector ấy, còn lại mỗi tiêu đề một
+    vector riêng, vuông góc với mọi vector khác, tức là không giống gì cả.
+
+    Văn bản được nhúng là tiêu đề rồi tới mô tả của Bài gốc; bộ nhúng giả chỉ nhìn dòng đầu.
+    """
+
+    mo_hinh = "nhung-gia"
+    SO_CHIEU = 1024
+    # Các chiều đầu dành cho toạ độ test đặt; các chiều sau cấp cho tiêu đề chưa đặt.
+    SO_CHIEU_DAT = 16
+
+    def __init__(self) -> None:
+        self.da_nhung: list[str] = []
+        self._vector: dict[str, list[float]] = {}
+        self._loi: Exception | None = None
+
+    def dat(self, tieu_de: str, *toa_do: float) -> None:
+        """Bài gốc có tiêu đề `tieu_de` nhận vector có các toạ độ đầu là `toa_do`."""
+        assert len(toa_do) <= self.SO_CHIEU_DAT
+        self._vector[tieu_de] = [*toa_do, *[0.0] * (self.SO_CHIEU - len(toa_do))]
+
+    def cung_su_kien(self, *tieu_de: str) -> None:
+        """Các Bài gốc có những tiêu đề này giống hệt nhau, và không giống Bài gốc nào khác."""
+        chieu = self.SO_CHIEU_DAT + len(self._vector)
+        for td in tieu_de:
+            self._vector[td] = [1.0 if i == chieu else 0.0 for i in range(self.SO_CHIEU)]
+
+    def hong(self, loi: Exception | None) -> None:
+        """Mọi lần nhúng sau đều ném `loi`; None là chạy lại bình thường."""
+        self._loi = loi
+
+    def nhung(self, van_ban: Sequence[str]) -> list[list[float]]:
+        if self._loi is not None:
+            raise self._loi
+        self.da_nhung += van_ban
+        return [self._vector_cua(vb.split("\n")[0]) for vb in van_ban]
+
+    def _vector_cua(self, tieu_de: str) -> list[float]:
+        if tieu_de not in self._vector:
+            chieu = self.SO_CHIEU_DAT + len(self._vector)
+            assert chieu < self.SO_CHIEU, "Test dùng quá nhiều tiêu đề cho bộ nhúng giả"
+            self._vector[tieu_de] = [1.0 if i == chieu else 0.0 for i in range(self.SO_CHIEU)]
+        return self._vector[tieu_de]
+
+
+def huong(do_giong: float) -> tuple[float, float]:
+    """Toạ độ của một vector đơn vị có độ giống `do_giong` với vector (1, 0)."""
+    return do_giong, math.sqrt(1 - do_giong**2)
+
+
 @dataclass(frozen=True)
 class UngVienThay:
-    """Một ứng viên đúng như LLM thấy trong đề bài."""
+    """Một Bài gốc của một ứng viên đúng như LLM thấy trong đề bài."""
 
     ma: int
     tieu_de: str
     dia_chi: str
+    # Thứ tự của ứng viên chứa Bài gốc này, từ 0.
+    nhom: int
+    # Tiêu đề Tin đã phát mà ứng viên giống; None là chuyện chưa phát.
+    tin_da_phat: str | None = None
 
 
 # Một bước của kịch bản: nhìn các ứng viên LLM được giao rồi trả lời.
@@ -290,6 +347,16 @@ class LLMTheoKichBan(BaseChatModel):
         """Mọi thứ LLM đọc được ở một lời gọi, nối thành một văn bản."""
         return "\n".join(str(tin_nhan.content) for tin_nhan in self.da_nhan[lan_goi])
 
+    def ung_vien_da_thay(self, lan_goi: int = 0) -> list[tuple[list[str], str | None]]:
+        """Các ứng viên trong đề bài ở một lời gọi, theo thứ tự: địa chỉ các Bài gốc của ứng
+        viên, và tiêu đề Tin đã phát mà nó giống."""
+        ung_vien: list[tuple[list[str], str | None]] = []
+        for bai in _ung_vien_trong(self.da_nhan[lan_goi]):
+            if bai.nhom == len(ung_vien):
+                ung_vien.append(([], bai.tin_da_phat))
+            ung_vien[bai.nhom][0].append(bai.dia_chi)
+        return ung_vien
+
     def _generate(
         self, messages: list[BaseMessage], stop: Any = None, run_manager: Any = None, **_: Any
     ) -> ChatResult:
@@ -297,15 +364,28 @@ class LLMTheoKichBan(BaseChatModel):
         buoc = self.kich_ban.pop(0) if self.kich_ban else self.lap_lai
         if isinstance(buoc, BaseException):
             raise buoc
-        de_bai = next(str(tn.content) for tn in messages if isinstance(tn, HumanMessage))
-        ung_vien = [
-            UngVienThay(muc["ma"], muc["tieu_de"], muc["dia_chi"])
-            for muc in map(json.loads, (d for d in de_bai.splitlines() if d.startswith("{")))
-        ]
+        ung_vien = _ung_vien_trong(messages)
         if buoc is None:
             da_doc = any(isinstance(tn, ToolMessage) for tn in messages)
             buoc = _nop_tat_ca if da_doc else _doc_tat_ca
         return ChatResult(generations=[ChatGeneration(message=buoc(ung_vien))])
+
+
+def _ung_vien_trong(tin_nhan: Sequence[BaseMessage]) -> list[UngVienThay]:
+    """Các Bài gốc ứng viên trong đề bài của Biên tập: mỗi dòng JSON là một ứng viên."""
+    de_bai = next(str(tn.content) for tn in tin_nhan if isinstance(tn, HumanMessage))
+    dong_ung_vien = (json.loads(d) for d in de_bai.splitlines() if d.startswith("{"))
+    return [
+        UngVienThay(
+            bai["ma"],
+            bai["tieu_de"],
+            bai["dia_chi"],
+            nhom,
+            uv["tin_da_phat"]["tieu_de"] if "tin_da_phat" in uv else None,
+        )
+        for nhom, uv in enumerate(dong_ung_vien)
+        for bai in uv["bai_goc"]
+    ]
 
 
 def _doc_tat_ca(ung_vien: Sequence[UngVienThay]) -> AIMessage:
@@ -313,9 +393,13 @@ def _doc_tat_ca(ung_vien: Sequence[UngVienThay]) -> AIMessage:
 
 
 def _nop_tat_ca(ung_vien: Sequence[UngVienThay]) -> AIMessage:
-    return nop(*(TinViet(uv.dia_chi, uv.tieu_de, f"Tóm tắt của {uv.tieu_de}.") for uv in ung_vien))(
-        ung_vien
-    )
+    """Mỗi ứng viên một Tin, lấy Bài gốc đầu tiên của nó làm Bài gốc chính."""
+    dau_moi_nhom = [
+        uv for i, uv in enumerate(ung_vien) if i == 0 or ung_vien[i - 1].nhom != uv.nhom
+    ]
+    return nop(
+        *(TinViet(uv.dia_chi, uv.tieu_de, f"Tóm tắt của {uv.tieu_de}.") for uv in dau_moi_nhom)
+    )(ung_vien)
 
 
 def ket_luan(dat: bool, li_do: str = "") -> AIMessage:
@@ -393,6 +477,7 @@ class TheGioi:
     kenh_dang: KenhDangGia = field(default_factory=KenhDangGia)
     noi_dung: NoiDungGia = field(default_factory=NoiDungGia)
     tim_kiem: TimKiemGia = field(default_factory=TimKiemGia)
+    nhung: NhungGia = field(default_factory=NhungGia)
     llm: LLMTheoKichBan = field(default_factory=LLMTheoKichBan)
     kiem_chung: KiemChungTheoLuat = field(default_factory=KiemChungTheoLuat)
     chay_ky: ChayKy = field(init=False)
@@ -403,6 +488,7 @@ class TheGioi:
             bo_thu_thap={LoaiNguon.RSS: self.nguon},
             bo_phat={LoaiKenhDang.TELEGRAM: self.kenh_dang},
             lay_noi_dung=self.noi_dung,
+            bo_nhung=self.nhung,
             bien_tap=BienTap(
                 self.llm, KiemChung(self.kiem_chung), self.tim_kiem, self.kho_trang_thai
             ),
@@ -517,6 +603,30 @@ class TheGioi:
                     .where(Tin.li_do_bo.is_not(None))
                     .order_by(Tin.ban_tin_id, Tin.thu_tu)
                 )
+            ]
+
+    def bai_goc_cua_tin(self, dia_chi_chinh: str) -> list[str]:
+        """Địa chỉ các Bài gốc của Tin có Bài gốc chính ở `dia_chi_chinh`, sớm nhất trước."""
+        with self.mo_phien() as phien:
+            tin = phien.scalars(
+                select(Tin)
+                .join(BaiGoc, Tin.bai_goc_chinh_id == BaiGoc.id)
+                .where(BaiGoc.dia_chi_chuan_hoa == chuan_hoa(dia_chi_chinh))
+            ).one()
+            return [bai.dia_chi for bai in tin.ung_vien.bai_goc]
+
+    def cap_nhat_cua(self, tieu_de: str) -> str | None:
+        """Tiêu đề Tin đã phát mà Tin `tieu_de` là bản "Cập nhật" của nó; None là Tin mới."""
+        with self.mo_phien() as phien:
+            tin = phien.scalars(select(Tin).where(Tin.tieu_de == tieu_de)).one()
+            return tin.cap_nhat_tin.tieu_de if tin.cap_nhat_tin else None
+
+    def ung_vien_da_luu(self) -> list[list[str]]:
+        """Địa chỉ các Bài gốc của từng ứng viên đã lưu, theo Kỳ rồi theo thứ tự ứng viên."""
+        with self.mo_phien() as phien:
+            return [
+                [bai.dia_chi for bai in uv.bai_goc]
+                for uv in phien.scalars(select(UngVien).order_by(UngVien.ky_id, UngVien.thu_tu))
             ]
 
     def luot_kiem_chung(self, dia_chi: str) -> list[tuple[str, str, bool, str]]:

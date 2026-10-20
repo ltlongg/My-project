@@ -72,6 +72,37 @@ def test_gui_ban_tin_thanh_mot_tin_nhan_gom_ten_chuyen_muc_ngay_va_tung_tin_kem_
     ]
 
 
+def test_tin_cap_nhat_co_nhan_truoc_tieu_de() -> None:
+    telegram = TelegramGia()
+    ban_tin = NoiDungBanTin(
+        chuyen_muc="Công nghệ",
+        thoi_diem=luc(8, 8),
+        tin=(
+            NoiDungTin(
+                "Apple chốt giao iPhone Duo từ tháng 1/2027",
+                "Tóm tắt.",
+                "https://bao.example/duo",
+                cap_nhat=True,
+            ),
+        ),
+    )
+
+    PhatTelegram(telegram.client, TOKEN).phat(MA_TRO_CHUYEN, ban_tin)
+
+    [(_, tham_so)] = telegram.loi_goi
+    assert '1. <a href="https://bao.example/duo"><b>Cập nhật: Apple chốt giao iPhone Duo' in str(
+        tham_so["text"]
+    )
+
+
+def test_nhan_cap_nhat_duoc_tinh_vao_do_dai_cua_tin() -> None:
+    tin = NoiDungTin("Tiêu đề", "Tóm tắt.", "https://bao.example/a")
+
+    assert NoiDungTin(tin.tieu_de, tin.tom_tat, tin.dia_chi, cap_nhat=True).do_dai == (
+        tin.do_dai + len("Cập nhật: ")
+    )
+
+
 def test_ban_tin_dai_duoc_chia_thanh_nhieu_tin_nhan_trong_gioi_han_4096_ky_tu() -> None:
     telegram = TelegramGia()
     ban_tin = NoiDungBanTin(

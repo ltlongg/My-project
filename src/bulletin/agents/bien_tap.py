@@ -44,20 +44,32 @@ SO_LAN_VIET_LAI_TOI_DA = 2
 CO_LINK = re.compile(r"https?://|www\.", re.IGNORECASE)
 
 KHUNG = f"""\
-Bạn là Biên tập của một bản tin tiếng Việt phát định kỳ. Mỗi Kỳ bạn nhận danh sách Bài gốc ứng \
-viên của một Chuyên mục, chọn những Tin đáng đọc nhất và viết từng Tin bằng tiếng Việt.
+Bạn là Biên tập của một bản tin tiếng Việt phát định kỳ. Mỗi Kỳ bạn nhận danh sách ứng viên Tin \
+của một Chuyên mục, chọn những Tin đáng đọc nhất và viết từng Tin bằng tiếng Việt.
+
+Mỗi ứng viên là một sự kiện, gồm một hay nhiều Bài gốc cùng nói về nó, có thể từ nhiều Nguồn và \
+nhiều ngôn ngữ. Mỗi ứng viên chỉ thành nhiều nhất một Tin. Với mỗi Tin, chọn một Bài gốc chính \
+trong ứng viên: Tin dẫn link tới nó và chỉ được viết từ nó. Ưu tiên nơi đưa tin đầu tiên hoặc \
+nguồn gốc nhất (trang của chính tổ chức trong tin, bài nghiên cứu gốc, tờ báo có tin sớm nhất), \
+miễn là đủ chi tiết.
+
+Ứng viên có tin_da_phat là chuyện đã có trong một Bản tin trước. Bỏ qua nó, trừ khi Bài gốc có \
+diễn biến mới đáng kể so với Tin đã phát (quyết định, con số hay kết quả mới), không chỉ là một \
+bài khác kể lại cùng chuyện. Nếu chọn, Tin được phát với nhãn "Cập nhật" (đừng tự viết nhãn này \
+vào tiêu đề): tiêu đề và câu đầu của tóm tắt nói ngay điều mới, li_do nêu điều mới so với Tin đã \
+phát.
 
 Cách làm:
-1. Dựa vào tiêu đề và Nguồn để khoanh những Bài gốc đáng cân nhắc theo Hướng dẫn của Chuyên mục.
-2. Gọi doc_bai_goc để đọc toàn văn mọi Bài gốc định chọn. Chỉ được viết Tin về Bài gốc đã đọc \
-toàn văn, và chỉ viết điều có trong toàn văn đó.
+1. Dựa vào tiêu đề và Nguồn để khoanh những ứng viên đáng cân nhắc theo Hướng dẫn của Chuyên mục.
+2. Gọi doc_bai_goc để đọc toàn văn Bài gốc chính của mọi Tin định viết. Chỉ được viết Tin khi đã \
+đọc toàn văn Bài gốc chính, và chỉ viết điều có trong toàn văn đó.
 3. Khi cần hiểu bối cảnh (một cái tên lạ, một sự kiện trước đó) thì gọi tim_kiem_web. Kết quả tìm \
 kiếm chỉ để hiểu bối cảnh: không đưa chi tiết chỉ có ở đó vào Tin, và không biến nó thành Tin.
 4. Gọi nop_ban_tin với các Tin đã chọn, Tin đáng đọc nhất đứng trước. Nếu bản nộp bị trả lại thì \
 sửa theo lí do rồi nộp lại.
-5. Kiểm chứng đối chiếu từng Tin với toàn văn Bài gốc. Tin không đạt được trả lại kèm lí do: viết \
-lại đúng theo Bài gốc rồi gọi viet_lai_tin. Tin vẫn không đạt sau {SO_LAN_VIET_LAI_TOI_DA} lần \
-viết lại thì bị bỏ khỏi Bản tin.
+5. Kiểm chứng đối chiếu từng Tin với toàn văn Bài gốc chính. Tin không đạt được trả lại kèm lí \
+do: viết lại đúng theo Bài gốc chính rồi gọi viet_lai_tin. Tin vẫn không đạt sau \
+{SO_LAN_VIET_LAI_TOI_DA} lần viết lại thì bị bỏ khỏi Bản tin.
 
 Quy tắc viết mỗi Tin:
 - Tiêu đề và tóm tắt bằng tiếng Việt, kể cả khi Bài gốc bằng tiếng Anh. Tóm tắt dài 4–6 câu, đủ \
@@ -65,8 +77,8 @@ Quy tắc viết mỗi Tin:
 - Giữ nguyên tiếng Anh tên riêng (người, công ty, sản phẩm, model) và thuật ngữ chuyên ngành quen \
 dùng (ví dụ GPU, open source, fine-tuning); không dịch chúng.
 - Số liệu, tên và ngày tháng phải đúng như Bài gốc. Tiêu đề không nói quá điều Bài gốc nói.
-- Tiêu đề, tóm tắt và link của Bài gốc cộng lại không quá {DO_DAI_TIN_TOI_DA} ký tự. Không chèn \
-link vào tiêu đề hay tóm tắt.
+- Tiêu đề, tóm tắt và link của Bài gốc chính cộng lại không quá {DO_DAI_TIN_TOI_DA} ký tự. Không \
+chèn link vào tiêu đề hay tóm tắt.
 - li_do: một hai câu cho biết vì sao Tin này đáng vào Bản tin."""
 
 NHAC_DUNG_CONG_CU = (
@@ -91,7 +103,7 @@ def _cong_cu(ten: str, mo_ta: str, thuoc_tinh: dict[str, Any]) -> dict[str, Any]
 
 
 _THUOC_TINH_BAN_VIET = {
-    "ma_bai_goc": {"type": "integer", "description": "Mã của Bài gốc mà Tin dẫn link tới"},
+    "ma_bai_goc": {"type": "integer", "description": "Mã của Bài gốc chính, mà Tin dẫn link tới"},
     "tieu_de": {"type": "string", "description": "Tiêu đề tiếng Việt"},
     "tom_tat": {"type": "string", "description": "Tóm tắt tiếng Việt, 4–6 câu"},
 }
@@ -109,7 +121,7 @@ def _danh_sach_tin(thuoc_tinh: dict[str, Any]) -> dict[str, Any]:
 CONG_CU = [
     _cong_cu(
         "doc_bai_goc",
-        "Đọc toàn văn một Bài gốc trong danh sách ứng viên.",
+        "Đọc toàn văn một Bài gốc của một ứng viên.",
         {"ma": {"type": "integer", "description": "Mã của Bài gốc"}},
     ),
     _cong_cu(
@@ -136,14 +148,31 @@ CONG_CU = [
 
 
 @dataclass(frozen=True)
-class UngVien:
-    """Một Bài gốc Biên tập được cân nhắc trong Kỳ."""
-
+class BaiGocUngVien:
     ma: int
     tieu_de: str
     nguon: str
     dia_chi: str
     xuat_hien_luc: datetime
+    mo_ta: str | None = None
+
+
+@dataclass(frozen=True)
+class TinDaPhat:
+    """Một Tin đã tới người đọc ở Bản tin trước."""
+
+    phat_luc: datetime
+    tieu_de: str
+    tom_tat: str
+
+
+@dataclass(frozen=True)
+class UngVien:
+    """Một ứng viên Tin Biên tập được cân nhắc trong Kỳ: các Bài gốc cùng nói về một sự kiện."""
+
+    bai_goc: Sequence[BaiGocUngVien]
+    # Tin đã phát mà ứng viên giống; có thì ứng viên chỉ được chọn như một Tin "Cập nhật".
+    tin_da_phat: TinDaPhat | None = None
 
 
 @dataclass(frozen=True)
@@ -233,7 +262,8 @@ class _ThamSoTim(BaseModel):
 
 class _TrangThai(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
-    # Mã, tiêu đề và link của các ứng viên: bản nộp được soát theo đây, kể cả khi chạy tiếp.
+    # Mỗi Bài gốc của các ứng viên: mã, tiêu đề, link, thứ tự ứng viên (`nhom`) và ứng viên có là
+    # chuyện đã phát không (`cap_nhat`). Bản nộp được soát theo đây, kể cả khi chạy tiếp.
     ung_vien: list[dict[str, Any]]
     so_tin_toi_da: int
     huong_dan_kiem_chung: str
@@ -312,7 +342,7 @@ class BienTap:
         def chay_cong_cu(state: _TrangThai) -> dict[str, Any]:
             tra_loi = state["messages"][-1]
             assert isinstance(tra_loi, AIMessage)
-            ung_vien = {uv["ma"]: uv["dia_chi"] for uv in state["ung_vien"]}
+            ung_vien = {uv["ma"]: uv for uv in state["ung_vien"]}
             da_doc = set(state["da_doc"])
             moi_doc: list[int] = []
             tin_nhan: list[AnyMessage] = [
@@ -447,16 +477,17 @@ class BienTap:
         )
 
     def _doc(
-        self, ma: int, ung_vien: dict[int, str], doc_bai_goc: Callable[[int], str]
+        self, ma: int, ung_vien: dict[int, dict[str, Any]], doc_bai_goc: Callable[[int], str]
     ) -> tuple[bool, str]:
-        """Toàn văn của ứng viên `ma` cho LLM đọc, kèm có đọc được hay không."""
+        """Toàn văn của Bài gốc `ma` cho LLM đọc, kèm có đọc được hay không."""
         if ma not in ung_vien:
             return False, f"Không có Bài gốc mã {ma} trong danh sách ứng viên."
-        log.info("Biên tập đọc Bài gốc %s", ung_vien[ma])
+        dia_chi = ung_vien[ma]["dia_chi"]
+        log.info("Biên tập đọc Bài gốc %s", dia_chi)
         try:
             toan_van = doc_bai_goc(ma)
         except Exception as loi:
-            log.warning("Không đọc được Bài gốc %s: %s", ung_vien[ma], loi)
+            log.warning("Không đọc được Bài gốc %s: %s", dia_chi, loi)
             return False, f"Không đọc được toàn văn Bài gốc {ma}: {loi}. Hãy chọn Bài gốc khác."
         return True, cat_toan_van(toan_van)
 
@@ -475,29 +506,43 @@ class BienTap:
         )
 
 
+def _gio(thoi_diem: datetime) -> str:
+    return thoi_diem.astimezone(GIO_VIET_NAM).isoformat(timespec="minutes")
+
+
+def _mo_ta_ung_vien(uv: UngVien) -> str:
+    """Một ứng viên như Biên tập thấy: một dòng JSON."""
+    mo_ta: dict[str, Any] = {
+        "bai_goc": [
+            {
+                "ma": bai.ma,
+                "tieu_de": bai.tieu_de,
+                **({"mo_ta": bai.mo_ta} if bai.mo_ta else {}),
+                "nguon": bai.nguon,
+                "dia_chi": bai.dia_chi,
+                "xuat_hien_luc": _gio(bai.xuat_hien_luc),
+            }
+            for bai in uv.bai_goc
+        ]
+    }
+    if uv.tin_da_phat is not None:
+        mo_ta["tin_da_phat"] = {
+            "phat_luc": _gio(uv.tin_da_phat.phat_luc),
+            "tieu_de": uv.tin_da_phat.tieu_de,
+            "tom_tat": uv.tin_da_phat.tom_tat,
+        }
+    return json.dumps(mo_ta, ensure_ascii=False)
+
+
 def _khoi_dau(de_bai: DeBai) -> _TrangThai:
     toi_da = de_bai.so_tin_toi_da
-    ung_vien = "\n".join(
-        json.dumps(
-            {
-                "ma": uv.ma,
-                "tieu_de": uv.tieu_de,
-                "nguon": uv.nguon,
-                "dia_chi": uv.dia_chi,
-                "xuat_hien_luc": uv.xuat_hien_luc.astimezone(GIO_VIET_NAM).isoformat(
-                    timespec="minutes"
-                ),
-            },
-            ensure_ascii=False,
-        )
-        for uv in de_bai.ung_vien
-    )
+    ung_vien = "\n".join(map(_mo_ta_ung_vien, de_bai.ung_vien))
     viec = (
         f"Chuyên mục: {de_bai.chuyen_muc}\n"
-        f"Bây giờ là {de_bai.thoi_diem.astimezone(GIO_VIET_NAM).isoformat(timespec='minutes')}.\n"
+        f"Bây giờ là {_gio(de_bai.thoi_diem)}.\n"
         f"Chọn từ {min(SO_TIN_NEN_CO, toi_da)} đến {toi_da} Tin đáng đọc nhất; chỉ chọn ít hơn "
         f"khi không đủ Bài gốc đáng đọc, và không bao giờ quá {toi_da}.\n\n"
-        f"Ứng viên, mỗi dòng một Bài gốc:\n{ung_vien}"
+        f"Ứng viên, mỗi dòng một ứng viên:\n{ung_vien}"
     )
     return {
         "messages": [
@@ -505,7 +550,15 @@ def _khoi_dau(de_bai: DeBai) -> _TrangThai:
             HumanMessage(viec),
         ],
         "ung_vien": [
-            {"ma": uv.ma, "tieu_de": uv.tieu_de, "dia_chi": uv.dia_chi} for uv in de_bai.ung_vien
+            {
+                "ma": bai.ma,
+                "tieu_de": bai.tieu_de,
+                "dia_chi": bai.dia_chi,
+                "nhom": thu_tu,
+                "cap_nhat": uv.tin_da_phat is not None,
+            }
+            for thu_tu, uv in enumerate(de_bai.ung_vien)
+            for bai in uv.bai_goc
         ],
         "so_tin_toi_da": toi_da,
         "huong_dan_kiem_chung": de_bai.huong_dan_kiem_chung,
@@ -526,13 +579,17 @@ def _tin_moi(tin: _TinNop) -> dict[str, Any]:
 
 
 def _soat(
-    ban_nop: _BanTinNop, ung_vien: dict[int, str], da_doc: set[int], so_tin_toi_da: int
+    ban_nop: _BanTinNop,
+    ung_vien: dict[int, dict[str, Any]],
+    da_doc: set[int],
+    so_tin_toi_da: int,
 ) -> list[str]:
     """Những chỗ bản nộp chưa hợp lệ; rỗng là hợp lệ."""
     loi = []
     if len(ban_nop.tin) > so_tin_toi_da:
         loi.append(f"Có {len(ban_nop.tin)} Tin, nhiều hơn mức tối đa {so_tin_toi_da}.")
-    ma_da_gap: set[int] = set()
+    # Bài gốc chính đã dùng đầu tiên của từng ứng viên.
+    nhom_da_gap: dict[int, int] = {}
     for tin in ban_nop.tin:
         ma = tin.ma_bai_goc
         if ma not in ung_vien:
@@ -541,9 +598,17 @@ def _soat(
                 "ứng viên, không dẫn tới kết quả tìm kiếm."
             )
             continue
-        if ma in ma_da_gap:
-            loi.append(f"Bài gốc {ma} được dùng cho hơn một Tin.")
-        ma_da_gap.add(ma)
+        # Trạng thái lưu từ trước khi có Gom Tin không có `nhom`: mỗi Bài gốc là một ứng viên.
+        nhom = ung_vien[ma].get("nhom", -ma)
+        if nhom in nhom_da_gap:
+            truoc = nhom_da_gap[nhom]
+            loi.append(
+                f"Bài gốc {ma} được dùng cho hơn một Tin."
+                if truoc == ma
+                else f"Bài gốc {truoc} và {ma} thuộc cùng một ứng viên, tức cùng một sự kiện; "
+                "mỗi ứng viên chỉ thành một Tin."
+            )
+        nhom_da_gap.setdefault(nhom, ma)
         if ma not in da_doc:
             loi.append(f"Tin về Bài gốc {ma}: chưa đọc toàn văn; gọi doc_bai_goc trước khi viết.")
         loi += _soat_ban_viet(tin, ung_vien[ma])
@@ -551,7 +616,9 @@ def _soat(
 
 
 def _soat_viet_lai(
-    viet_lai: _VietLaiNop, cho_viet_lai: dict[int, dict[str, Any]], ung_vien: dict[int, str]
+    viet_lai: _VietLaiNop,
+    cho_viet_lai: dict[int, dict[str, Any]],
+    ung_vien: dict[int, dict[str, Any]],
 ) -> list[str]:
     """Những chỗ bản viết lại chưa hợp lệ; rỗng là hợp lệ."""
     loi = []
@@ -570,7 +637,7 @@ def _soat_viet_lai(
     return loi
 
 
-def _soat_ban_viet(ban: _BanVietNop, dia_chi: str) -> list[str]:
+def _soat_ban_viet(ban: _BanVietNop, bai_goc_chinh: dict[str, Any]) -> list[str]:
     """Những chỗ một bản viết vi phạm quy tắc viết; rỗng là hợp lệ."""
     loi = []
     ma = ban.ma_bai_goc
@@ -579,7 +646,9 @@ def _soat_ban_viet(ban: _BanVietNop, dia_chi: str) -> list[str]:
         loi.append(f"Tin về Bài gốc {ma}: tóm tắt phải bằng tiếng Việt.")
     if CO_LINK.search(ban.tieu_de) or CO_LINK.search(ban.tom_tat):
         loi.append(f"Tin về Bài gốc {ma}: tiêu đề và tóm tắt không được chứa link.")
-    do_dai = NoiDungTin(ban.tieu_de, ban.tom_tat, dia_chi).do_dai
+    do_dai = NoiDungTin(
+        ban.tieu_de, ban.tom_tat, bai_goc_chinh["dia_chi"], bai_goc_chinh.get("cap_nhat", False)
+    ).do_dai
     if do_dai > DO_DAI_TIN_TOI_DA:
         loi.append(
             f"Tin về Bài gốc {ma}: tiêu đề, tóm tắt và link dài {do_dai} ký tự, vượt giới hạn "

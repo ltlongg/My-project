@@ -17,6 +17,7 @@ from bulletin.cau_hinh import CauHinh
 from bulletin.chay_ky import ChayKy
 from bulletin.collectors.rss import ThuThapRss
 from bulletin.csdl import mo_kho_trang_thai, nang_cap, tao_engine, tao_mo_phien
+from bulletin.embeddings.endpoint import NhungQuaEndpoint
 from bulletin.extractors.bai_bao import LayBaiBao
 from bulletin.khoi_tao import MA_CONG_NGHE, khoi_tao
 from bulletin.mo_hinh import KetQuaKy, LoaiKenhDang, LoaiNguon
@@ -117,6 +118,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         httpx.Client(
             timeout=20, headers={"User-Agent": "Mozilla/5.0 (compatible; bulletin/0.1)"}
         ) as client,
+        # Model nhúng chạy trên CPU: một lô văn bản có thể mất vài chục giây.
+        httpx.Client(timeout=httpx.Timeout(300, connect=10)) as client_nhung,
         mo_kho_trang_thai(engine) as kho_trang_thai,
     ):
         tim_kiem: BoTimKiem = (
@@ -129,6 +132,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             bo_thu_thap={LoaiNguon.RSS: ThuThapRss(client)},
             bo_phat={LoaiKenhDang.TELEGRAM: PhatTelegram(client, cau_hinh.telegram_bot_token)},
             lay_noi_dung=LayBaiBao(client),
+            bo_nhung=NhungQuaEndpoint(
+                client_nhung,
+                cau_hinh.nhung_base_url,
+                cau_hinh.model_nhung,
+                cau_hinh.nhung_api_key,
+            ),
             bien_tap=BienTap(
                 _llm(cau_hinh, model_bien_tap),
                 KiemChung(_llm(cau_hinh, model_kiem_chung)),
@@ -156,7 +165,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"của Kiểm chứng: phiên bản {ky.phien_ban_huong_dan_kiem_chung}"
         )
     for thu_tu, tin in enumerate(ky.ban_tin.tin if ky.ban_tin else (), start=1):
-        print(f"  {thu_tu}. {tin.tieu_de}\n     {tin.tom_tat}\n     {tin.dia_chi}")
+        print(f"  {thu_tu}. {tin.tieu_de_kem_nhan}\n     {tin.tom_tat}\n     {tin.dia_chi}")
     return 1 if ky.ket_qua is KetQuaKy.HONG else 0
 
 
