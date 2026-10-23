@@ -1,7 +1,7 @@
 """Khuôn test tại điểm "Chạy Kỳ": Nguồn giả, Kênh đăng giả, LLM theo kịch bản, bộ nhúng giả,
 đồng hồ giả, Postgres thật.
 
-Đồng hồ giả là tham số `thoi_diem` của `ChayKy.chay`: test tự nói "bây giờ" là lúc nào.
+Đồng hồ giả là tham số `run_at` của `Runner.run`: test tự nói "bây giờ" là lúc nào.
 """
 
 import json
@@ -23,273 +23,279 @@ from pydantic import Field
 from sqlalchemy import Engine, create_engine, func, make_url, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
-from bulletin.agents.bien_tap import BienTap
-from bulletin.agents.kiem_chung import KiemChung
-from bulletin.chay_ky import ChayKy
-from bulletin.collectors import BaiGocMoi
-from bulletin.csdl import BANG_TRANG_THAI, mo_kho_trang_thai, nang_cap, tao_engine, tao_mo_phien
-from bulletin.dia_chi import chuan_hoa
-from bulletin.mo_hinh import (
-    BaiGoc,
-    ChuyenMuc,
-    CoSo,
-    HuongDan,
-    KenhDang,
-    LoaiKenhDang,
-    LoaiNguon,
-    LuotKiemChung,
-    Nguon,
-    Tin,
-    UngVien,
-    VaiTro,
+from bulletin.agents.editor import Editor
+from bulletin.agents.verifier import Verifier
+from bulletin.collectors import NewArticle
+from bulletin.db import (
+    CHECKPOINT_TABLES,
+    make_engine,
+    make_session_factory,
+    open_checkpointer,
+    upgrade,
 )
-from bulletin.publishers import NoiDungBanTin
-from bulletin.search import KetQuaTimKiem
+from bulletin.models import (
+    Article,
+    Base,
+    Candidate,
+    Channel,
+    ChannelKind,
+    Guideline,
+    Role,
+    Section,
+    Source,
+    SourceKind,
+    Story,
+    Verification,
+)
+from bulletin.publishers import BulletinContent
+from bulletin.runner import Runner
+from bulletin.search import SearchResult
+from bulletin.urls import normalize_url
 
-URL_MAC_DINH = "postgresql+psycopg://bantin:bantin@127.0.0.1:54320/bantin_test"
-GIO_VIET_NAM = ZoneInfo("Asia/Ho_Chi_Minh")
+DEFAULT_URL = "postgresql+psycopg://bulletin:bulletin@127.0.0.1:54320/bulletin_test"
+VIETNAM_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 
 
-def luc(ngay: int, gio: int, phut: int = 0) -> datetime:
+def at(day: int, hour: int, minute: int = 0) -> datetime:
     """Một thời điểm trong tháng 10/2026, giờ Việt Nam."""
-    return datetime(2026, 10, ngay, gio, phut, tzinfo=GIO_VIET_NAM)
+    return datetime(2026, 10, day, hour, minute, tzinfo=VIETNAM_TZ)
 
 
 @pytest.fixture(scope="session")
 def engine() -> Iterator[Engine]:
-    url = make_url(os.environ.get("TEST_DATABASE_URL", URL_MAC_DINH))
-    ten_csdl = url.database or ""
+    url = make_url(os.environ.get("TEST_DATABASE_URL", DEFAULT_URL))
+    database = url.database or ""
     # Lược đồ bị xoá sạch trước mỗi lần chạy, nên không bao giờ trỏ vào cơ sở dữ liệu thật.
-    assert ten_csdl.endswith("_test"), f"Cơ sở dữ liệu test phải có tên kết thúc bằng _test: {url}"
+    assert database.endswith("_test"), f"Cơ sở dữ liệu test phải có tên kết thúc bằng _test: {url}"
 
-    quan_tri = create_engine(url.set(database="postgres"), isolation_level="AUTOCOMMIT")
-    with quan_tri.connect() as ket_noi:
-        da_co = ket_noi.scalar(
-            text("SELECT 1 FROM pg_database WHERE datname = :ten"), {"ten": ten_csdl}
+    admin = create_engine(url.set(database="postgres"), isolation_level="AUTOCOMMIT")
+    with admin.connect() as connection:
+        exists = connection.scalar(
+            text("SELECT 1 FROM pg_database WHERE datname = :name"), {"name": database}
         )
-        if not da_co:
-            ket_noi.execute(text(f'CREATE DATABASE "{ten_csdl}"'))
-    quan_tri.dispose()
+        if not exists:
+            connection.execute(text(f'CREATE DATABASE "{database}"'))
+    admin.dispose()
 
-    engine = tao_engine(url.render_as_string(hide_password=False))
-    with engine.begin() as ket_noi:
-        ket_noi.execute(text("DROP SCHEMA public CASCADE"))
-        ket_noi.execute(text("CREATE SCHEMA public"))
-    nang_cap(engine)
+    engine = make_engine(url.render_as_string(hide_password=False))
+    with engine.begin() as connection:
+        connection.execute(text("DROP SCHEMA public CASCADE"))
+        connection.execute(text("CREATE SCHEMA public"))
+    upgrade(engine)
     yield engine
     engine.dispose()
 
 
 @pytest.fixture(scope="session")
-def kho_trang_thai(engine: Engine) -> Iterator[PostgresSaver]:
-    with mo_kho_trang_thai(engine) as kho:
-        yield kho
+def checkpointer(engine: Engine) -> Iterator[PostgresSaver]:
+    with open_checkpointer(engine) as saver:
+        yield saver
 
 
 @pytest.fixture
-def mo_phien(engine: Engine) -> sessionmaker[Session]:
+def session_factory(engine: Engine) -> sessionmaker[Session]:
     """Hàm mở phiên làm việc trên một cơ sở dữ liệu đã dọn sạch."""
-    bang = ", ".join(f'"{ten}"' for ten in (*CoSo.metadata.tables, *BANG_TRANG_THAI))
-    with engine.begin() as ket_noi:
-        ket_noi.execute(text(f"TRUNCATE {bang} RESTART IDENTITY CASCADE"))
-    return tao_mo_phien(engine)
+    tables = ", ".join(f'"{name}"' for name in (*Base.metadata.tables, *CHECKPOINT_TABLES))
+    with engine.begin() as connection:
+        connection.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
+    return make_session_factory(engine)
 
 
-class NguonGia:
+class FakeCollector:
     """Bộ thu thập giả: trả về đúng những Bài gốc test đã đặt cho từng địa chỉ Nguồn."""
 
     def __init__(self) -> None:
-        self._bai_goc: dict[str, Sequence[BaiGocMoi]] = {}
-        self._loi: dict[str, Exception] = {}
+        self._articles: dict[str, Sequence[NewArticle]] = {}
+        self._errors: dict[str, Exception] = {}
 
-    def co(self, dia_chi: str, *bai_goc: BaiGocMoi) -> None:
-        self._bai_goc[dia_chi] = bai_goc
-        self._loi.pop(dia_chi, None)
+    def has(self, url: str, *articles: NewArticle) -> None:
+        self._articles[url] = articles
+        self._errors.pop(url, None)
 
-    def hong(self, dia_chi: str, loi: Exception) -> None:
-        self._loi[dia_chi] = loi
+    def fail(self, url: str, error: Exception) -> None:
+        self._errors[url] = error
 
-    def thu_thap(self, dia_chi: str, tu_moc: datetime) -> Sequence[BaiGocMoi]:
-        if dia_chi in self._loi:
-            raise self._loi[dia_chi]
-        return self._bai_goc.get(dia_chi, ())
+    def collect(self, url: str, since: datetime) -> Sequence[NewArticle]:
+        if url in self._errors:
+            raise self._errors[url]
+        return self._articles.get(url, ())
 
 
-class KenhDangGia:
+class FakePublisher:
     """Bộ phát giả: ghi lại mọi Bản tin tới từng địa chỉ Kênh đăng."""
 
     def __init__(self) -> None:
-        self.da_nhan: list[tuple[str, NoiDungBanTin]] = []
-        self._loi: dict[str, Exception] = {}
+        self.received: list[tuple[str, BulletinContent]] = []
+        self._errors: dict[str, Exception] = {}
 
-    def hong(self, dia_chi: str, loi: Exception) -> None:
-        self._loi[dia_chi] = loi
+    def fail(self, address: str, error: Exception) -> None:
+        self._errors[address] = error
 
-    def sua(self, dia_chi: str) -> None:
-        del self._loi[dia_chi]
+    def fix(self, address: str) -> None:
+        del self._errors[address]
 
-    def phat(self, dia_chi: str, ban_tin: NoiDungBanTin) -> None:
-        if dia_chi in self._loi:
-            raise self._loi[dia_chi]
-        self.da_nhan.append((dia_chi, ban_tin))
+    def publish(self, address: str, bulletin: BulletinContent) -> None:
+        if address in self._errors:
+            raise self._errors[address]
+        self.received.append((address, bulletin))
 
 
-class NoiDungGia:
+class FakeExtractor:
     """Bộ lấy nội dung giả: mọi Bài gốc đều có toàn văn, trừ những bài test đặt là hỏng."""
 
     def __init__(self) -> None:
-        self.da_lay: list[str] = []
-        self._toan_van: dict[str, str] = {}
-        self._loi: dict[str, Exception] = {}
+        self.extracted: list[str] = []
+        self._full_texts: dict[str, str] = {}
+        self._errors: dict[str, Exception] = {}
 
-    def co(self, dia_chi: str, toan_van: str) -> None:
-        self._toan_van[dia_chi] = toan_van
+    def has(self, url: str, full_text: str) -> None:
+        self._full_texts[url] = full_text
 
-    def hong(self, dia_chi: str, loi: Exception) -> None:
-        self._loi[dia_chi] = loi
+    def fail(self, url: str, error: Exception) -> None:
+        self._errors[url] = error
 
-    def lay(self, dia_chi: str) -> str:
-        self.da_lay.append(dia_chi)
-        if dia_chi in self._loi:
-            raise self._loi[dia_chi]
-        return self._toan_van.get(dia_chi, f"Toàn văn của {dia_chi}.")
+    def extract(self, url: str) -> str:
+        self.extracted.append(url)
+        if url in self._errors:
+            raise self._errors[url]
+        return self._full_texts.get(url, f"Toàn văn của {url}.")
 
 
-class TimKiemGia:
+class FakeSearcher:
     """Bộ tìm kiếm giả: ghi lại truy vấn và trả về kết quả test đã đặt."""
 
     def __init__(self) -> None:
-        self.da_tim: list[str] = []
-        self.ket_qua: Sequence[KetQuaTimKiem] = ()
+        self.queries: list[str] = []
+        self.results: Sequence[SearchResult] = ()
 
-    def tim(self, truy_van: str) -> Sequence[KetQuaTimKiem]:
-        self.da_tim.append(truy_van)
-        return self.ket_qua
+    def search(self, query: str) -> Sequence[SearchResult]:
+        self.queries.append(query)
+        return self.results
 
 
-class NhungGia:
+class FakeEmbedder:
     """Bộ nhúng giả: tiêu đề nào test đã đặt toạ độ thì nhận vector ấy, còn lại mỗi tiêu đề một
     vector riêng, vuông góc với mọi vector khác, tức là không giống gì cả.
 
     Văn bản được nhúng là tiêu đề rồi tới mô tả của Bài gốc; bộ nhúng giả chỉ nhìn dòng đầu.
     """
 
-    mo_hinh = "nhung-gia"
-    SO_CHIEU = 1024
+    model = "fake-embedder"
+    DIMENSIONS = 1024
     # Các chiều đầu dành cho toạ độ test đặt; các chiều sau cấp cho tiêu đề chưa đặt.
-    SO_CHIEU_DAT = 16
+    PINNED_DIMENSIONS = 16
 
     def __init__(self) -> None:
-        self.da_nhung: list[str] = []
-        self._vector: dict[str, list[float]] = {}
-        self._loi: Exception | None = None
+        self.embedded: list[str] = []
+        self._vectors: dict[str, list[float]] = {}
+        self._error: Exception | None = None
 
-    def dat(self, tieu_de: str, *toa_do: float) -> None:
-        """Bài gốc có tiêu đề `tieu_de` nhận vector có các toạ độ đầu là `toa_do`."""
-        assert len(toa_do) <= self.SO_CHIEU_DAT
-        self._vector[tieu_de] = [*toa_do, *[0.0] * (self.SO_CHIEU - len(toa_do))]
+    def pin(self, title: str, *coordinates: float) -> None:
+        """Bài gốc có tiêu đề `title` nhận vector có các toạ độ đầu là `coordinates`."""
+        assert len(coordinates) <= self.PINNED_DIMENSIONS
+        self._vectors[title] = [*coordinates, *[0.0] * (self.DIMENSIONS - len(coordinates))]
 
-    def cung_su_kien(self, *tieu_de: str) -> None:
+    def same_event(self, *titles: str) -> None:
         """Các Bài gốc có những tiêu đề này giống hệt nhau, và không giống Bài gốc nào khác."""
-        chieu = self.SO_CHIEU_DAT + len(self._vector)
-        for td in tieu_de:
-            self._vector[td] = [1.0 if i == chieu else 0.0 for i in range(self.SO_CHIEU)]
+        dimension = self.PINNED_DIMENSIONS + len(self._vectors)
+        for title in titles:
+            self._vectors[title] = [1.0 if i == dimension else 0.0 for i in range(self.DIMENSIONS)]
 
-    def hong(self, loi: Exception | None) -> None:
-        """Mọi lần nhúng sau đều ném `loi`; None là chạy lại bình thường."""
-        self._loi = loi
+    def fail(self, error: Exception | None) -> None:
+        """Mọi lần nhúng sau đều ném `error`; None là chạy lại bình thường."""
+        self._error = error
 
-    def nhung(self, van_ban: Sequence[str]) -> list[list[float]]:
-        if self._loi is not None:
-            raise self._loi
-        self.da_nhung += van_ban
-        return [self._vector_cua(vb.split("\n")[0]) for vb in van_ban]
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        if self._error is not None:
+            raise self._error
+        self.embedded += texts
+        return [self._vector_for(text.split("\n")[0]) for text in texts]
 
-    def _vector_cua(self, tieu_de: str) -> list[float]:
-        if tieu_de not in self._vector:
-            chieu = self.SO_CHIEU_DAT + len(self._vector)
-            assert chieu < self.SO_CHIEU, "Test dùng quá nhiều tiêu đề cho bộ nhúng giả"
-            self._vector[tieu_de] = [1.0 if i == chieu else 0.0 for i in range(self.SO_CHIEU)]
-        return self._vector[tieu_de]
+    def _vector_for(self, title: str) -> list[float]:
+        if title not in self._vectors:
+            dimension = self.PINNED_DIMENSIONS + len(self._vectors)
+            assert dimension < self.DIMENSIONS, "Test dùng quá nhiều tiêu đề cho bộ nhúng giả"
+            self._vectors[title] = [1.0 if i == dimension else 0.0 for i in range(self.DIMENSIONS)]
+        return self._vectors[title]
 
 
-def huong(do_giong: float) -> tuple[float, float]:
-    """Toạ độ của một vector đơn vị có độ giống `do_giong` với vector (1, 0)."""
-    return do_giong, math.sqrt(1 - do_giong**2)
+def unit_vector(similarity: float) -> tuple[float, float]:
+    """Toạ độ của một vector đơn vị có độ giống `similarity` với vector (1, 0)."""
+    return similarity, math.sqrt(1 - similarity**2)
 
 
 @dataclass(frozen=True)
-class UngVienThay:
+class SeenArticle:
     """Một Bài gốc của một ứng viên đúng như LLM thấy trong đề bài."""
 
-    ma: int
-    tieu_de: str
-    dia_chi: str
+    id: int
+    title: str
+    url: str
     # Thứ tự của ứng viên chứa Bài gốc này, từ 0.
-    nhom: int
+    group: int
     # Tiêu đề Tin đã phát mà ứng viên giống; None là chuyện chưa phát.
-    tin_da_phat: str | None = None
+    published_story: str | None = None
 
 
 # Một bước của kịch bản: nhìn các ứng viên LLM được giao rồi trả lời.
-Buoc = Callable[[Sequence[UngVienThay]], AIMessage]
-_ma_goi = count(1)
+Step = Callable[[Sequence[SeenArticle]], AIMessage]
+_call_ids = count(1)
 
 
-def _goi(ten: str, tham_so: dict[str, Any]) -> dict[str, Any]:
-    return {"name": ten, "args": tham_so, "id": f"goi-{next(_ma_goi)}", "type": "tool_call"}
+def _call(name: str, args: dict[str, Any]) -> dict[str, Any]:
+    return {"name": name, "args": args, "id": f"call-{next(_call_ids)}", "type": "tool_call"}
 
 
-def _ma(ung_vien: Sequence[UngVienThay], bai_goc: str | int) -> int:
-    """Mã của ứng viên có địa chỉ `bai_goc`; số thì giữ nguyên, để test nộp cả mã không có."""
-    if isinstance(bai_goc, int):
-        return bai_goc
-    return next(uv.ma for uv in ung_vien if uv.dia_chi == bai_goc)
+def _id(seen: Sequence[SeenArticle], article: str | int) -> int:
+    """Mã của ứng viên có địa chỉ `article`; số thì giữ nguyên, để test nộp cả mã không có."""
+    if isinstance(article, int):
+        return article
+    return next(a.id for a in seen if a.url == article)
 
 
-def doc(*dia_chi: str) -> Buoc:
+def read(*urls: str) -> Step:
     """LLM gọi công cụ đọc toàn văn cho từng Bài gốc."""
-    return lambda ung_vien: AIMessage(
-        "", tool_calls=[_goi("doc_bai_goc", {"ma": _ma(ung_vien, dc)}) for dc in dia_chi]
+    return lambda seen: AIMessage(
+        "", tool_calls=[_call("read_article", {"id": _id(seen, url)}) for url in urls]
     )
 
 
-def tim(truy_van: str) -> Buoc:
+def search(query: str) -> Step:
     """LLM gọi công cụ tìm kiếm web."""
-    return lambda ung_vien: AIMessage("", tool_calls=[_goi("tim_kiem_web", {"truy_van": truy_van})])
+    return lambda seen: AIMessage("", tool_calls=[_call("web_search", {"query": query})])
 
 
-def noi(van_ban: str) -> Buoc:
+def say(text: str) -> Step:
     """LLM trả lời bằng chữ, không gọi công cụ nào."""
-    return lambda ung_vien: AIMessage(van_ban)
+    return lambda seen: AIMessage(text)
 
 
 @dataclass(frozen=True)
-class TinViet:
-    """Một Tin LLM nộp; `bai_goc` là địa chỉ của ứng viên, hoặc một mã tuỳ ý."""
+class DraftStory:
+    """Một Tin LLM nộp; `article` là địa chỉ của ứng viên, hoặc một mã tuỳ ý."""
 
-    bai_goc: str | int
-    tieu_de: str = "Tiêu đề do Biên tập viết"
-    tom_tat: str = "Tóm tắt bằng tiếng Việt do Biên tập viết từ toàn văn."
-    li_do: str = "Đáng đọc."
+    article: str | int
+    title: str = "Tiêu đề do Biên tập viết"
+    summary: str = "Tóm tắt bằng tiếng Việt do Biên tập viết từ toàn văn."
+    reason: str = "Đáng đọc."
 
 
-def nop(*tin: TinViet) -> Buoc:
+def submit(*stories: DraftStory) -> Step:
     """LLM nộp Bản tin gồm các Tin đã viết."""
-    return lambda ung_vien: AIMessage(
+    return lambda seen: AIMessage(
         "",
         tool_calls=[
-            _goi(
-                "nop_ban_tin",
+            _call(
+                "submit_bulletin",
                 {
-                    "tin": [
+                    "stories": [
                         {
-                            "ma_bai_goc": _ma(ung_vien, t.bai_goc),
-                            "tieu_de": t.tieu_de,
-                            "tom_tat": t.tom_tat,
-                            "li_do": t.li_do,
+                            "article_id": _id(seen, s.article),
+                            "title": s.title,
+                            "summary": s.summary,
+                            "reason": s.reason,
                         }
-                        for t in tin
+                        for s in stories
                     ]
                 },
             )
@@ -297,21 +303,21 @@ def nop(*tin: TinViet) -> Buoc:
     )
 
 
-def viet_lai(*tin: TinViet) -> Buoc:
-    """LLM nộp bản viết lại của các Tin bị Kiểm chứng trả lại; `li_do` của TinViet bị bỏ qua."""
-    return lambda ung_vien: AIMessage(
+def rewrite(*stories: DraftStory) -> Step:
+    """LLM nộp bản viết lại của các Tin bị Kiểm chứng trả lại; `reason` của DraftStory bị bỏ qua."""
+    return lambda seen: AIMessage(
         "",
         tool_calls=[
-            _goi(
-                "viet_lai_tin",
+            _call(
+                "rewrite_stories",
                 {
-                    "tin": [
+                    "stories": [
                         {
-                            "ma_bai_goc": _ma(ung_vien, t.bai_goc),
-                            "tieu_de": t.tieu_de,
-                            "tom_tat": t.tom_tat,
+                            "article_id": _id(seen, s.article),
+                            "title": s.title,
+                            "summary": s.summary,
                         }
-                        for t in tin
+                        for s in stories
                     ]
                 },
             )
@@ -319,332 +325,328 @@ def viet_lai(*tin: TinViet) -> Buoc:
     )
 
 
-class LLMTheoKichBan(BaseChatModel):
+class ScriptedLLM(BaseChatModel):
     """LLM giả của Biên tập: trả lời lần lượt theo kịch bản test đặt.
 
     Không đặt kịch bản thì nó biên tập máy móc: đọc mọi ứng viên rồi nộp tất cả theo thứ tự được
     giao, giữ nguyên tiêu đề gốc. Một bước là ngoại lệ thì lời gọi đó ném ngoại lệ ấy.
     """
 
-    kich_ban: list[Buoc | BaseException] = Field(default_factory=list)
+    script: list[Step | BaseException] = Field(default_factory=list)
     # Bước lặp lại mãi khi kịch bản đã hết, thay cho cách biên tập máy móc.
-    lap_lai: Buoc | None = None
+    repeat: Step | None = None
     # Các tin nhắn LLM nhận được ở từng lời gọi.
-    da_nhan: list[list[BaseMessage]] = Field(default_factory=list)
+    received: list[list[BaseMessage]] = Field(default_factory=list)
 
     @property
     def _llm_type(self) -> str:
-        return "theo-kich-ban"
+        return "scripted"
 
-    def bind_tools(self, tools: Any, **tuy_chon: Any) -> "LLMTheoKichBan":
+    def bind_tools(self, tools: Any, **options: Any) -> "ScriptedLLM":
         return self
 
-    def se(self, *buoc: Buoc | BaseException) -> None:
+    def will(self, *steps: Step | BaseException) -> None:
         """Đặt các bước tiếp theo của kịch bản."""
-        self.kich_ban = list(buoc)
+        self.script = list(steps)
 
-    def van_ban_da_nhan(self, lan_goi: int = -1) -> str:
+    def text_received(self, call: int = -1) -> str:
         """Mọi thứ LLM đọc được ở một lời gọi, nối thành một văn bản."""
-        return "\n".join(str(tin_nhan.content) for tin_nhan in self.da_nhan[lan_goi])
+        return "\n".join(str(message.content) for message in self.received[call])
 
-    def ung_vien_da_thay(self, lan_goi: int = 0) -> list[tuple[list[str], str | None]]:
+    def candidates_seen(self, call: int = 0) -> list[tuple[list[str], str | None]]:
         """Các ứng viên trong đề bài ở một lời gọi, theo thứ tự: địa chỉ các Bài gốc của ứng
         viên, và tiêu đề Tin đã phát mà nó giống."""
-        ung_vien: list[tuple[list[str], str | None]] = []
-        for bai in _ung_vien_trong(self.da_nhan[lan_goi]):
-            if bai.nhom == len(ung_vien):
-                ung_vien.append(([], bai.tin_da_phat))
-            ung_vien[bai.nhom][0].append(bai.dia_chi)
-        return ung_vien
+        candidates: list[tuple[list[str], str | None]] = []
+        for article in _articles_in(self.received[call]):
+            if article.group == len(candidates):
+                candidates.append(([], article.published_story))
+            candidates[article.group][0].append(article.url)
+        return candidates
 
     def _generate(
         self, messages: list[BaseMessage], stop: Any = None, run_manager: Any = None, **_: Any
     ) -> ChatResult:
-        self.da_nhan.append(list(messages))
-        buoc = self.kich_ban.pop(0) if self.kich_ban else self.lap_lai
-        if isinstance(buoc, BaseException):
-            raise buoc
-        ung_vien = _ung_vien_trong(messages)
-        if buoc is None:
-            da_doc = any(isinstance(tn, ToolMessage) for tn in messages)
-            buoc = _nop_tat_ca if da_doc else _doc_tat_ca
-        return ChatResult(generations=[ChatGeneration(message=buoc(ung_vien))])
+        self.received.append(list(messages))
+        step = self.script.pop(0) if self.script else self.repeat
+        if isinstance(step, BaseException):
+            raise step
+        seen = _articles_in(messages)
+        if step is None:
+            has_read = any(isinstance(message, ToolMessage) for message in messages)
+            step = _submit_all if has_read else _read_all
+        return ChatResult(generations=[ChatGeneration(message=step(seen))])
 
 
-def _ung_vien_trong(tin_nhan: Sequence[BaseMessage]) -> list[UngVienThay]:
+def _articles_in(messages: Sequence[BaseMessage]) -> list[SeenArticle]:
     """Các Bài gốc ứng viên trong đề bài của Biên tập: mỗi dòng JSON là một ứng viên."""
-    de_bai = next(str(tn.content) for tn in tin_nhan if isinstance(tn, HumanMessage))
-    dong_ung_vien = (json.loads(d) for d in de_bai.splitlines() if d.startswith("{"))
+    task = next(str(m.content) for m in messages if isinstance(m, HumanMessage))
+    candidate_lines = (json.loads(line) for line in task.splitlines() if line.startswith("{"))
     return [
-        UngVienThay(
-            bai["ma"],
-            bai["tieu_de"],
-            bai["dia_chi"],
-            nhom,
-            uv["tin_da_phat"]["tieu_de"] if "tin_da_phat" in uv else None,
+        SeenArticle(
+            article["id"],
+            article["title"],
+            article["url"],
+            group,
+            candidate["published_story"]["title"] if "published_story" in candidate else None,
         )
-        for nhom, uv in enumerate(dong_ung_vien)
-        for bai in uv["bai_goc"]
+        for group, candidate in enumerate(candidate_lines)
+        for article in candidate["articles"]
     ]
 
 
-def _doc_tat_ca(ung_vien: Sequence[UngVienThay]) -> AIMessage:
-    return doc(*(uv.dia_chi for uv in ung_vien))(ung_vien)
+def _read_all(seen: Sequence[SeenArticle]) -> AIMessage:
+    return read(*(a.url for a in seen))(seen)
 
 
-def _nop_tat_ca(ung_vien: Sequence[UngVienThay]) -> AIMessage:
+def _submit_all(seen: Sequence[SeenArticle]) -> AIMessage:
     """Mỗi ứng viên một Tin, lấy Bài gốc đầu tiên của nó làm Bài gốc chính."""
-    dau_moi_nhom = [
-        uv for i, uv in enumerate(ung_vien) if i == 0 or ung_vien[i - 1].nhom != uv.nhom
-    ]
-    return nop(
-        *(TinViet(uv.dia_chi, uv.tieu_de, f"Tóm tắt của {uv.tieu_de}.") for uv in dau_moi_nhom)
-    )(ung_vien)
+    first_of_each_group = [a for i, a in enumerate(seen) if i == 0 or seen[i - 1].group != a.group]
+    return submit(
+        *(DraftStory(a.url, a.title, f"Tóm tắt của {a.title}.") for a in first_of_each_group)
+    )(seen)
 
 
-def ket_luan(dat: bool, li_do: str = "") -> AIMessage:
+def verdict(passed: bool, reason: str = "") -> AIMessage:
     """Kiểm chứng trả kết luận về Tin đang xét."""
-    return AIMessage("", tool_calls=[_goi("ket_luan", {"dat": dat, "li_do": li_do})])
+    return AIMessage("", tool_calls=[_call("verdict", {"passed": passed, "reason": reason})])
 
 
-class KiemChungTheoLuat(BaseChatModel):
+class RuleBasedVerifierLLM(BaseChatModel):
     """LLM giả của Kiểm chứng: Tin có chứa một chi tiết test đã đánh dấu là sai thì không đạt,
     còn lại đạt.
 
-    Các bước đặt bằng `se` được dùng trước luật, để test cho nó trả lời hỏng hay ném lỗi.
+    Các bước đặt bằng `will` được dùng trước luật, để test cho nó trả lời hỏng hay ném lỗi.
     """
 
-    sai: dict[str, str] = Field(default_factory=dict)
-    kich_ban: list[AIMessage | BaseException] = Field(default_factory=list)
-    da_nhan: list[list[BaseMessage]] = Field(default_factory=list)
+    wrong: dict[str, str] = Field(default_factory=dict)
+    script: list[AIMessage | BaseException] = Field(default_factory=list)
+    received: list[list[BaseMessage]] = Field(default_factory=list)
 
     @property
     def _llm_type(self) -> str:
-        return "kiem-chung-theo-luat"
+        return "rule-based-verifier"
 
-    def bind_tools(self, tools: Any, **tuy_chon: Any) -> "KiemChungTheoLuat":
+    def bind_tools(self, tools: Any, **options: Any) -> "RuleBasedVerifierLLM":
         return self
 
-    def bat(self, chi_tiet: str, li_do: str) -> None:
-        """Tin nào có `chi_tiet` trong tiêu đề hay tóm tắt thì không đạt, với lí do `li_do`."""
-        self.sai[chi_tiet] = li_do
+    def flag(self, detail: str, reason: str) -> None:
+        """Tin nào có `detail` trong tiêu đề hay tóm tắt thì không đạt, với lí do `reason`."""
+        self.wrong[detail] = reason
 
-    def se(self, *buoc: AIMessage | BaseException) -> None:
-        self.kich_ban = list(buoc)
+    def will(self, *steps: AIMessage | BaseException) -> None:
+        self.script = list(steps)
 
-    def tin_da_xet(self) -> list[str]:
+    def stories_checked(self) -> list[str]:
         """Tiêu đề của Tin ở từng lời gọi, theo thứ tự."""
-        return [_tin_dang_xet(tin_nhan)["tieu_de"] for tin_nhan in self.da_nhan]
+        return [_story_under_check(messages)["title"] for messages in self.received]
 
-    def van_ban_da_nhan(self, lan_goi: int = -1) -> str:
-        return "\n".join(str(tin_nhan.content) for tin_nhan in self.da_nhan[lan_goi])
+    def text_received(self, call: int = -1) -> str:
+        return "\n".join(str(message.content) for message in self.received[call])
 
     def _generate(
         self, messages: list[BaseMessage], stop: Any = None, run_manager: Any = None, **_: Any
     ) -> ChatResult:
-        self.da_nhan.append(list(messages))
-        if self.kich_ban:
-            buoc = self.kich_ban.pop(0)
-            if isinstance(buoc, BaseException):
-                raise buoc
-            return ChatResult(generations=[ChatGeneration(message=buoc)])
-        tin = _tin_dang_xet(messages)
-        noi_dung = f"{tin['tieu_de']}\n{tin['tom_tat']}"
-        li_do = [li_do for chi_tiet, li_do in self.sai.items() if chi_tiet in noi_dung]
+        self.received.append(list(messages))
+        if self.script:
+            step = self.script.pop(0)
+            if isinstance(step, BaseException):
+                raise step
+            return ChatResult(generations=[ChatGeneration(message=step)])
+        story = _story_under_check(messages)
+        content = f"{story['title']}\n{story['summary']}"
+        reasons = [reason for detail, reason in self.wrong.items() if detail in content]
         return ChatResult(
-            generations=[ChatGeneration(message=ket_luan(not li_do, "; ".join(li_do)))]
+            generations=[ChatGeneration(message=verdict(not reasons, "; ".join(reasons)))]
         )
 
 
-def _tin_dang_xet(tin_nhan: Sequence[BaseMessage]) -> dict[str, str]:
+def _story_under_check(messages: Sequence[BaseMessage]) -> dict[str, str]:
     """Tin Kiểm chứng được giao: dòng JSON cuối cùng của đề bài."""
-    de_bai = next(str(tn.content) for tn in tin_nhan if isinstance(tn, HumanMessage))
-    tin: dict[str, str] = json.loads(de_bai.splitlines()[-1])
-    return tin
+    task = next(str(m.content) for m in messages if isinstance(m, HumanMessage))
+    story: dict[str, str] = json.loads(task.splitlines()[-1])
+    return story
 
 
-HUONG_DAN_MAC_DINH = "Chọn Tin đáng đọc nhất."
-HUONG_DAN_KIEM_CHUNG_MAC_DINH = "Đối chiếu số liệu, tên và ngày tháng với Bài gốc."
+DEFAULT_GUIDELINE = "Chọn Tin đáng đọc nhất."
+DEFAULT_VERIFIER_GUIDELINE = "Đối chiếu số liệu, tên và ngày tháng với Bài gốc."
 
 
 @dataclass
-class TheGioi:
-    """Mọi thứ một test "Chạy Kỳ" cần: thiết lập, các đầu giả và lối vào `chay_ky`."""
+class World:
+    """Mọi thứ một test "Chạy Kỳ" cần: thiết lập, các đầu giả và lối vào `runner`."""
 
-    mo_phien: sessionmaker[Session]
-    kho_trang_thai: PostgresSaver
-    nguon: NguonGia = field(default_factory=NguonGia)
-    kenh_dang: KenhDangGia = field(default_factory=KenhDangGia)
-    noi_dung: NoiDungGia = field(default_factory=NoiDungGia)
-    tim_kiem: TimKiemGia = field(default_factory=TimKiemGia)
-    nhung: NhungGia = field(default_factory=NhungGia)
-    llm: LLMTheoKichBan = field(default_factory=LLMTheoKichBan)
-    kiem_chung: KiemChungTheoLuat = field(default_factory=KiemChungTheoLuat)
-    chay_ky: ChayKy = field(init=False)
+    session_factory: sessionmaker[Session]
+    checkpointer: PostgresSaver
+    collector: FakeCollector = field(default_factory=FakeCollector)
+    publisher: FakePublisher = field(default_factory=FakePublisher)
+    extractor: FakeExtractor = field(default_factory=FakeExtractor)
+    searcher: FakeSearcher = field(default_factory=FakeSearcher)
+    embedder: FakeEmbedder = field(default_factory=FakeEmbedder)
+    llm: ScriptedLLM = field(default_factory=ScriptedLLM)
+    verifier: RuleBasedVerifierLLM = field(default_factory=RuleBasedVerifierLLM)
+    runner: Runner = field(init=False)
 
     def __post_init__(self) -> None:
-        self.chay_ky = ChayKy(
-            self.mo_phien,
-            bo_thu_thap={LoaiNguon.RSS: self.nguon},
-            bo_phat={LoaiKenhDang.TELEGRAM: self.kenh_dang},
-            lay_noi_dung=self.noi_dung,
-            bo_nhung=self.nhung,
-            bien_tap=BienTap(
-                self.llm, KiemChung(self.kiem_chung), self.tim_kiem, self.kho_trang_thai
-            ),
+        self.runner = Runner(
+            self.session_factory,
+            collectors={SourceKind.RSS: self.collector},
+            publishers={ChannelKind.TELEGRAM: self.publisher},
+            extractor=self.extractor,
+            embedder=self.embedder,
+            editor=Editor(self.llm, Verifier(self.verifier), self.searcher, self.checkpointer),
         )
-        self.doi_huong_dan_kiem_chung(HUONG_DAN_KIEM_CHUNG_MAC_DINH)
+        self.set_verifier_guideline(DEFAULT_VERIFIER_GUIDELINE)
 
-    def them_chuyen_muc(
+    def add_section(
         self,
-        ma: str,
+        slug: str,
         *,
-        ten: str,
-        nguon: Sequence[str],
-        kenh_dang: Sequence[str],
-        so_tin_toi_da: int = 7,
-        huong_dan: str | None = HUONG_DAN_MAC_DINH,
+        name: str,
+        sources: Sequence[str],
+        channels: Sequence[str],
+        max_stories: int = 7,
+        guideline: str | None = DEFAULT_GUIDELINE,
     ) -> None:
         """Khai một Chuyên mục; Nguồn và Kênh đăng trùng địa chỉ được dùng chung.
 
-        `huong_dan` là Hướng dẫn cho Biên tập, phiên bản 1; None là chưa có Hướng dẫn.
+        `guideline` là Hướng dẫn cho Biên tập, phiên bản 1; None là chưa có Hướng dẫn.
         """
-        with self.mo_phien.begin() as phien:
-            chuyen_muc = ChuyenMuc(ma=ma, ten=ten, so_tin_toi_da=so_tin_toi_da)
-            for dia_chi in nguon:
-                da_co = phien.scalar(select(Nguon).where(Nguon.dia_chi == dia_chi))
-                chuyen_muc.nguon.append(
-                    da_co or Nguon(loai=LoaiNguon.RSS, ten=dia_chi, dia_chi=dia_chi)
+        with self.session_factory.begin() as session:
+            section = Section(slug=slug, name=name, max_stories=max_stories)
+            for url in sources:
+                existing = session.scalar(select(Source).where(Source.url == url))
+                section.sources.append(existing or Source(kind=SourceKind.RSS, name=url, url=url))
+            for address in channels:
+                channel = session.scalar(select(Channel).where(Channel.address == address))
+                section.channels.append(
+                    channel or Channel(kind=ChannelKind.TELEGRAM, name=address, address=address)
                 )
-            for dia_chi in kenh_dang:
-                kenh = phien.scalar(select(KenhDang).where(KenhDang.dia_chi == dia_chi))
-                chuyen_muc.kenh_dang.append(
-                    kenh or KenhDang(loai=LoaiKenhDang.TELEGRAM, ten=dia_chi, dia_chi=dia_chi)
-                )
-            phien.add(chuyen_muc)
-        if huong_dan is not None:
-            self.doi_huong_dan(ma, huong_dan)
+            session.add(section)
+        if guideline is not None:
+            self.set_guideline(slug, guideline)
 
-    def doi_huong_dan(self, ma_chuyen_muc: str, noi_dung: str) -> int:
+    def set_guideline(self, section_slug: str, content: str) -> int:
         """Đặt một phiên bản Hướng dẫn mới của Biên tập có hiệu lực; trả về số phiên bản."""
-        with self.mo_phien() as phien:
-            chuyen_muc_id = phien.scalars(
-                select(ChuyenMuc.id).where(ChuyenMuc.ma == ma_chuyen_muc)
+        with self.session_factory() as session:
+            section_id = session.scalars(
+                select(Section.id).where(Section.slug == section_slug)
             ).one()
-        return self._doi_huong_dan(VaiTro.BIEN_TAP, chuyen_muc_id, noi_dung)
+        return self._set_guideline(Role.EDITOR, section_id, content)
 
-    def doi_huong_dan_kiem_chung(self, noi_dung: str | None) -> int:
+    def set_verifier_guideline(self, content: str | None) -> int:
         """Đặt một phiên bản Hướng dẫn chung mới của Kiểm chứng có hiệu lực; trả về số phiên bản.
 
         None là không còn phiên bản nào có hiệu lực.
         """
-        return self._doi_huong_dan(VaiTro.KIEM_CHUNG, None, noi_dung)
+        return self._set_guideline(Role.VERIFIER, None, content)
 
-    def _doi_huong_dan(
-        self, vai_tro: VaiTro, chuyen_muc_id: int | None, noi_dung: str | None
-    ) -> int:
-        with self.mo_phien.begin() as phien:
-            cung_loai = (
-                HuongDan.vai_tro == vai_tro,
-                HuongDan.chuyen_muc_id.is_(None)
-                if chuyen_muc_id is None
-                else HuongDan.chuyen_muc_id == chuyen_muc_id,
+    def _set_guideline(self, role: Role, section_id: int | None, content: str | None) -> int:
+        with self.session_factory.begin() as session:
+            same_kind = (
+                Guideline.role == role,
+                Guideline.section_id.is_(None)
+                if section_id is None
+                else Guideline.section_id == section_id,
             )
-            phien_ban = (
-                phien.scalar(select(func.max(HuongDan.phien_ban)).where(*cung_loai)) or 0
+            version = (
+                session.scalar(select(func.max(Guideline.version)).where(*same_kind)) or 0
             ) + 1
-            phien.execute(update(HuongDan).where(*cung_loai).values(co_hieu_luc=False))
-            if noi_dung is not None:
-                phien.add(
-                    HuongDan(
-                        vai_tro=vai_tro,
-                        chuyen_muc_id=chuyen_muc_id,
-                        phien_ban=phien_ban,
-                        noi_dung=noi_dung,
-                        co_hieu_luc=True,
+            session.execute(update(Guideline).where(*same_kind).values(is_active=False))
+            if content is not None:
+                session.add(
+                    Guideline(
+                        role=role,
+                        section_id=section_id,
+                        version=version,
+                        content=content,
+                        is_active=True,
                     )
                 )
-            return phien_ban
+            return version
 
-    def tinh_trang_nguon(self) -> dict[str, str | None]:
+    def source_errors(self) -> dict[str, str | None]:
         """Lỗi gần nhất được lưu của từng Nguồn, theo địa chỉ; không lỗi là None."""
-        with self.mo_phien() as phien:
-            return {nguon.dia_chi: nguon.loi_gan_nhat for nguon in phien.scalars(select(Nguon))}
+        with self.session_factory() as session:
+            return {source.url: source.last_error for source in session.scalars(select(Source))}
 
-    def so_bai_goc_da_luu(self) -> int:
-        with self.mo_phien() as phien:
-            return phien.scalar(select(func.count()).select_from(BaiGoc)) or 0
+    def stored_article_count(self) -> int:
+        with self.session_factory() as session:
+            return session.scalar(select(func.count()).select_from(Article)) or 0
 
-    def toan_van_da_luu(self, dia_chi: str) -> str | None:
-        """Toàn văn được lưu của Bài gốc ở `dia_chi`; chưa có là None."""
-        with self.mo_phien() as phien:
-            return phien.scalars(
-                select(BaiGoc.toan_van).where(BaiGoc.dia_chi_chuan_hoa == chuan_hoa(dia_chi))
+    def stored_full_text(self, url: str) -> str | None:
+        """Toàn văn được lưu của Bài gốc ở `url`; chưa có là None."""
+        with self.session_factory() as session:
+            return session.scalars(
+                select(Article.full_text).where(Article.normalized_url == normalize_url(url))
             ).one()
 
-    def tin_da_luu(self) -> list[tuple[str, str, str, str]]:
+    def stored_stories(self) -> list[tuple[str, str, str, str]]:
         """Các Tin đã lưu mà không bị bỏ, theo thứ tự: tiêu đề, tóm tắt, lí do chọn, địa chỉ Bài
         gốc chính."""
-        with self.mo_phien() as phien:
+        with self.session_factory() as session:
             return [
-                (tin.tieu_de, tin.tom_tat, tin.li_do, tin.bai_goc_chinh.dia_chi)
-                for tin in phien.scalars(
-                    select(Tin).where(Tin.li_do_bo.is_(None)).order_by(Tin.ban_tin_id, Tin.thu_tu)
+                (story.title, story.summary, story.reason, story.primary_article.url)
+                for story in session.scalars(
+                    select(Story)
+                    .where(Story.drop_reason.is_(None))
+                    .order_by(Story.bulletin_id, Story.position)
                 )
             ]
 
-    def tin_bi_bo(self) -> list[tuple[str, str, str | None]]:
+    def dropped_stories(self) -> list[tuple[str, str, str | None]]:
         """Các Tin đã lưu nhưng bị bỏ khỏi Bản tin: tiêu đề, địa chỉ Bài gốc chính, lí do bỏ."""
-        with self.mo_phien() as phien:
+        with self.session_factory() as session:
             return [
-                (tin.tieu_de, tin.bai_goc_chinh.dia_chi, tin.li_do_bo)
-                for tin in phien.scalars(
-                    select(Tin)
-                    .where(Tin.li_do_bo.is_not(None))
-                    .order_by(Tin.ban_tin_id, Tin.thu_tu)
+                (story.title, story.primary_article.url, story.drop_reason)
+                for story in session.scalars(
+                    select(Story)
+                    .where(Story.drop_reason.is_not(None))
+                    .order_by(Story.bulletin_id, Story.position)
                 )
             ]
 
-    def bai_goc_cua_tin(self, dia_chi_chinh: str) -> list[str]:
-        """Địa chỉ các Bài gốc của Tin có Bài gốc chính ở `dia_chi_chinh`, sớm nhất trước."""
-        with self.mo_phien() as phien:
-            tin = phien.scalars(
-                select(Tin)
-                .join(BaiGoc, Tin.bai_goc_chinh_id == BaiGoc.id)
-                .where(BaiGoc.dia_chi_chuan_hoa == chuan_hoa(dia_chi_chinh))
+    def story_articles(self, primary_url: str) -> list[str]:
+        """Địa chỉ các Bài gốc của Tin có Bài gốc chính ở `primary_url`, sớm nhất trước."""
+        with self.session_factory() as session:
+            story = session.scalars(
+                select(Story)
+                .join(Article, Story.primary_article_id == Article.id)
+                .where(Article.normalized_url == normalize_url(primary_url))
             ).one()
-            return [bai.dia_chi for bai in tin.ung_vien.bai_goc]
+            return [article.url for article in story.candidate.articles]
 
-    def cap_nhat_cua(self, tieu_de: str) -> str | None:
-        """Tiêu đề Tin đã phát mà Tin `tieu_de` là bản "Cập nhật" của nó; None là Tin mới."""
-        with self.mo_phien() as phien:
-            tin = phien.scalars(select(Tin).where(Tin.tieu_de == tieu_de)).one()
-            return tin.cap_nhat_tin.tieu_de if tin.cap_nhat_tin else None
+    def update_of(self, title: str) -> str | None:
+        """Tiêu đề Tin đã phát mà Tin `title` là bản "Cập nhật" của nó; None là Tin mới."""
+        with self.session_factory() as session:
+            story = session.scalars(select(Story).where(Story.title == title)).one()
+            return story.update_of.title if story.update_of else None
 
-    def ung_vien_da_luu(self) -> list[list[str]]:
+    def stored_candidates(self) -> list[list[str]]:
         """Địa chỉ các Bài gốc của từng ứng viên đã lưu, theo Kỳ rồi theo thứ tự ứng viên."""
-        with self.mo_phien() as phien:
+        with self.session_factory() as session:
             return [
-                [bai.dia_chi for bai in uv.bai_goc]
-                for uv in phien.scalars(select(UngVien).order_by(UngVien.ky_id, UngVien.thu_tu))
+                [article.url for article in candidate.articles]
+                for candidate in session.scalars(
+                    select(Candidate).order_by(Candidate.run_id, Candidate.position)
+                )
             ]
 
-    def luot_kiem_chung(self, dia_chi: str) -> list[tuple[str, str, bool, str]]:
-        """Các lượt Kiểm chứng đã lưu của Tin về Bài gốc ở `dia_chi`, theo thứ tự: tiêu đề và tóm
+    def verifications(self, url: str) -> list[tuple[str, str, bool, str]]:
+        """Các lượt Kiểm chứng đã lưu của Tin về Bài gốc ở `url`, theo thứ tự: tiêu đề và tóm
         tắt được xét, đạt hay không, lí do."""
-        with self.mo_phien() as phien:
+        with self.session_factory() as session:
             return [
-                (luot.tieu_de, luot.tom_tat, luot.dat, luot.li_do)
-                for luot in phien.scalars(
-                    select(LuotKiemChung)
-                    .join(Tin)
-                    .join(BaiGoc, Tin.bai_goc_chinh_id == BaiGoc.id)
-                    .where(BaiGoc.dia_chi_chuan_hoa == chuan_hoa(dia_chi))
-                    .order_by(LuotKiemChung.tin_id, LuotKiemChung.lan)
+                (verification.title, verification.summary, verification.passed, verification.reason)
+                for verification in session.scalars(
+                    select(Verification)
+                    .join(Story)
+                    .join(Article, Story.primary_article_id == Article.id)
+                    .where(Article.normalized_url == normalize_url(url))
+                    .order_by(Verification.story_id, Verification.attempt)
                 )
             ]
 
 
 @pytest.fixture
-def the_gioi(mo_phien: sessionmaker[Session], kho_trang_thai: PostgresSaver) -> TheGioi:
-    return TheGioi(mo_phien, kho_trang_thai)
+def world(session_factory: sessionmaker[Session], checkpointer: PostgresSaver) -> World:
+    return World(session_factory, checkpointer)

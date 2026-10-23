@@ -5,55 +5,57 @@ from collections.abc import Sequence
 
 import httpx
 
-from bulletin.embeddings import LoiNhung
+from bulletin.embeddings import EmbeddingError
 
 # Text Embeddings Inference mặc định nhận tối đa ngần này văn bản mỗi lời gọi.
-SO_VAN_BAN_MOI_LAN = 32
+BATCH_SIZE = 32
 
 
-class NhungQuaEndpoint:
+class EndpointEmbedder:
     def __init__(
-        self, client: httpx.Client, dia_chi: str, mo_hinh: str, khoa: str | None = None
+        self, client: httpx.Client, base_url: str, model: str, api_key: str | None = None
     ) -> None:
         self._client = client
-        self._dia_chi = dia_chi.rstrip("/") + "/embeddings"
-        self._khoa = khoa
-        self.mo_hinh = mo_hinh
+        self._url = base_url.rstrip("/") + "/embeddings"
+        self._api_key = api_key
+        self.model = model
 
-    def nhung(self, van_ban: Sequence[str]) -> list[list[float]]:
-        vector: list[list[float]] = []
-        for dau in range(0, len(van_ban), SO_VAN_BAN_MOI_LAN):
-            vector += self._nhung_mot_lan(van_ban[dau : dau + SO_VAN_BAN_MOI_LAN])
-        return vector
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), BATCH_SIZE):
+            vectors += self._embed_batch(texts[start : start + BATCH_SIZE])
+        return vectors
 
-    def _nhung_mot_lan(self, van_ban: Sequence[str]) -> list[list[float]]:
+    def _embed_batch(self, texts: Sequence[str]) -> list[list[float]]:
         try:
-            phan_hoi = self._client.post(
-                self._dia_chi,
-                json={"model": self.mo_hinh, "input": list(van_ban)},
-                headers={"Authorization": f"Bearer {self._khoa}"} if self._khoa else None,
+            response = self._client.post(
+                self._url,
+                json={"model": self.model, "input": list(texts)},
+                headers={"Authorization": f"Bearer {self._api_key}"} if self._api_key else None,
             )
-        except httpx.HTTPError as loi:
-            raise LoiNhung(
-                f"Không kết nối được tới dịch vụ nhúng {self._dia_chi} ({type(loi).__name__})"
+        except httpx.HTTPError as error:
+            raise EmbeddingError(
+                f"Không kết nối được tới dịch vụ nhúng {self._url} ({type(error).__name__})"
             ) from None
         try:
-            du_lieu = phan_hoi.json()
+            data = response.json()
         except ValueError:
-            du_lieu = None
-        if phan_hoi.is_error or not isinstance(du_lieu, dict):
-            raise LoiNhung(f"Dịch vụ nhúng từ chối: {_mo_ta_loi(du_lieu, phan_hoi.status_code)}")
-        muc = sorted(du_lieu.get("data") or [], key=lambda m: m.get("index", 0))
-        if len(muc) != len(van_ban) or not all(m.get("embedding") for m in muc):
-            raise LoiNhung(f"Dịch vụ nhúng trả {len(muc)} vector cho {len(van_ban)} văn bản")
-        return [[float(so) for so in m["embedding"]] for m in muc]
+            data = None
+        if response.is_error or not isinstance(data, dict):
+            raise EmbeddingError(
+                f"Dịch vụ nhúng từ chối: {_error_message(data, response.status_code)}"
+            )
+        items = sorted(data.get("data") or [], key=lambda item: item.get("index", 0))
+        if len(items) != len(texts) or not all(item.get("embedding") for item in items):
+            raise EmbeddingError(f"Dịch vụ nhúng trả {len(items)} vector cho {len(texts)} văn bản")
+        return [[float(x) for x in item["embedding"]] for item in items]
 
 
-def _mo_ta_loi(du_lieu: object, ma: int) -> str:
+def _error_message(data: object, status_code: int) -> str:
     """Lời lỗi của dịch vụ: Text Embeddings Inference trả `{"message": "..."}`, OpenAI trả
     `{"error": {"message": "..."}}`."""
-    if not isinstance(du_lieu, dict):
-        return f"mã {ma}"
-    loi = du_lieu.get("error")
-    loi = loi.get("message") if isinstance(loi, dict) else loi or du_lieu.get("message")
-    return str(loi) if loi else f"mã {ma}"
+    if not isinstance(data, dict):
+        return f"mã {status_code}"
+    error = data.get("error")
+    error = error.get("message") if isinstance(error, dict) else error or data.get("message")
+    return str(error) if error else f"mã {status_code}"

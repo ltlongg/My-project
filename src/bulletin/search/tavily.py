@@ -4,37 +4,37 @@ from collections.abc import Sequence
 
 import httpx
 
-from bulletin.search import SO_KET_QUA, KetQuaTimKiem, LoiTimKiem
+from bulletin.search import RESULT_COUNT, SearchError, SearchResult
 
 
-class TimKiemTavily:
-    def __init__(self, client: httpx.Client, khoa: str) -> None:
+class TavilySearch:
+    def __init__(self, client: httpx.Client, api_key: str) -> None:
         self._client = client
-        self._khoa = khoa
+        self._api_key = api_key
 
-    def tim(self, truy_van: str) -> Sequence[KetQuaTimKiem]:
+    def search(self, query: str) -> Sequence[SearchResult]:
         try:
-            phan_hoi = self._client.post(
+            response = self._client.post(
                 "https://api.tavily.com/search",
-                json={"query": truy_van, "max_results": SO_KET_QUA},
-                headers={"Authorization": f"Bearer {self._khoa}"},
+                json={"query": query, "max_results": RESULT_COUNT},
+                headers={"Authorization": f"Bearer {self._api_key}"},
             )
-        except httpx.HTTPError as loi:
-            raise LoiTimKiem(f"Không kết nối được tới Tavily ({type(loi).__name__})") from None
+        except httpx.HTTPError as error:
+            raise SearchError(f"Không kết nối được tới Tavily ({type(error).__name__})") from None
         try:
-            du_lieu = phan_hoi.json()
+            data = response.json()
         except ValueError:
-            du_lieu = None
-        if phan_hoi.is_error or not isinstance(du_lieu, dict):
-            chi_tiet = du_lieu.get("detail") if isinstance(du_lieu, dict) else None
-            mo_ta = chi_tiet.get("error") if isinstance(chi_tiet, dict) else chi_tiet
-            raise LoiTimKiem(f"Tavily từ chối: {mo_ta or f'mã {phan_hoi.status_code}'}")
+            data = None
+        if response.is_error or not isinstance(data, dict):
+            detail = data.get("detail") if isinstance(data, dict) else None
+            message = detail.get("error") if isinstance(detail, dict) else detail
+            raise SearchError(f"Tavily từ chối: {message or f'mã {response.status_code}'}")
         return [
-            KetQuaTimKiem(
-                tieu_de=str(muc.get("title") or ""),
-                dia_chi=str(muc["url"]),
-                trich_doan=str(muc.get("content") or ""),
+            SearchResult(
+                title=str(item.get("title") or ""),
+                url=str(item["url"]),
+                snippet=str(item.get("content") or ""),
             )
-            for muc in du_lieu.get("results") or []
-            if muc.get("url")
+            for item in data.get("results") or []
+            if item.get("url")
         ]

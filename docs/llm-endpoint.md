@@ -1,6 +1,6 @@
 # Endpoint LLM: làm được gì và dùng model nào
 
-Kết quả của `uv run bulletin thu-llm` ngày 2026-10-08 (ticket 02). Chạy lại lệnh mỗi khi đổi model hoặc đổi endpoint, rồi cập nhật ghi chú này.
+Kết quả của `uv run bulletin probe-llm` ngày 2026-10-08 (ticket 02). Chạy lại lệnh mỗi khi đổi model hoặc đổi endpoint, rồi cập nhật ghi chú này.
 
 Endpoint là một proxy chạy trên máy phát triển (`http://localhost:20128/v1`), đứng trước hai nhà cung cấp: `cx/` là Codex qua một tài khoản ChatGPT, `ds/` là DeepSeek.
 
@@ -35,7 +35,7 @@ Bộ thử chỉ cho biết model **làm được gì**, không so được mode
 | **Kiểm chứng** | `ds/deepseek-v4-pro` | Khác nhà cung cấp với **Biên tập**, để người soát không mắc cùng lỗi với người viết |
 | Cải tiến | `cx/gpt-5.6-luna` | Chưa có căn cứ để chọn khác **Biên tập** |
 
-Mỗi vai trò có một biến riêng, trống thì dùng `MODEL`. Ticket 04 đã thêm `MODEL_BIEN_TAP`, ticket 05 thêm `MODEL_KIEM_CHUNG`; `MODEL_SO_TUYEN` và `MODEL_CAI_TIEN` được thêm khi vai trò đó có code.
+Mỗi vai trò có một biến riêng, trống thì dùng `MODEL`. Ticket 04 đã thêm `EDITOR_MODEL`, ticket 05 thêm `VERIFIER_MODEL`; `SHORTLIST_MODEL` và `IMPROVER_MODEL` được thêm khi vai trò đó có code.
 
 ## Điều code phải tính tới
 
@@ -49,4 +49,4 @@ Mỗi vai trò có một biến riêng, trống thì dùng `MODEL`. Ticket 04 đ
 
 ## Model nhúng tự chạy
 
-Chọn `BAAI/bge-m3`: đa ngôn ngữ (có tiếng Việt), vector 1.024 chiều, giấy phép MIT, chạy được trên CPU với vài trăm **Bài gốc** mỗi ngày. Nếu server thiếu RAM thì lùi về `intfloat/multilingual-e5-small` (384 chiều). Lựa chọn dựa trên đặc tính đã công bố của hai model. Ticket 06 đã chạy thử `bge-m3` trên RSS thật và giữ lựa chọn này; số đo, ngưỡng gom và tài nguyên cần có ở `docs/gom-tin.md`.
+Chọn `BAAI/bge-m3`: đa ngôn ngữ (có tiếng Việt), vector 1.024 chiều, giấy phép MIT, chạy được trên CPU với vài trăm **Bài gốc** mỗi ngày. Nếu server thiếu RAM thì lùi về `intfloat/multilingual-e5-small` (384 chiều). Lựa chọn dựa trên đặc tính đã công bố của hai model. Ticket 06 đã chạy thử `bge-m3` trên RSS thật và giữ lựa chọn này; số đo, ngưỡng gom và tài nguyên cần có ở `docs/clustering.md`.

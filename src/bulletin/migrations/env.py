@@ -1,24 +1,24 @@
 from alembic import context
 from sqlalchemy import create_engine
 
-from bulletin.cau_hinh import CauHinh
-from bulletin.mo_hinh import CoSo
+from bulletin.config import Settings
+from bulletin.models import Base
 
-target_metadata = CoSo.metadata
+target_metadata = Base.metadata
 
 
 def run_migrations_online() -> None:
-    # bulletin.csdl.nang_cap truyền sẵn kết nối; lệnh alembic gọi trực tiếp thì đọc DATABASE_URL.
-    ket_noi = context.config.attributes.get("connection")
-    if ket_noi is not None:
-        context.configure(connection=ket_noi, target_metadata=target_metadata)
+    # bulletin.db.upgrade truyền sẵn kết nối; lệnh alembic gọi trực tiếp thì đọc DATABASE_URL.
+    connection = context.config.attributes.get("connection")
+    if connection is not None:
+        context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()
         return
 
-    engine = create_engine(CauHinh().database_url)
-    with engine.connect() as ket_noi_moi:
-        context.configure(connection=ket_noi_moi, target_metadata=target_metadata)
+    engine = create_engine(Settings().database_url)
+    with engine.connect() as new_connection:
+        context.configure(connection=new_connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()
 

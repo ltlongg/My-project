@@ -7,20 +7,20 @@ from typing import Protocol
 
 
 @dataclass(frozen=True)
-class BaiGocMoi:
+class NewArticle:
     """Một Bài gốc vừa lấy về từ Nguồn, chưa lưu."""
 
-    dia_chi: str
-    tieu_de: str
+    url: str
+    title: str
     # Nguồn không cho biết thời điểm xuất bản thì để trống.
-    xuat_ban_luc: datetime | None = None
+    published_at: datetime | None = None
     # Đoạn mô tả ngắn Nguồn kèm theo, dạng chữ thuần; không có thì để trống.
-    mo_ta: str | None = None
+    description: str | None = None
 
 
-class BoThuThap(Protocol):
-    def thu_thap(self, dia_chi: str, tu_moc: datetime) -> Sequence[BaiGocMoi]:
-        """Trả về các Bài gốc mới của Nguồn ở `dia_chi` kể từ `tu_moc`.
+class Collector(Protocol):
+    def collect(self, url: str, since: datetime) -> Sequence[NewArticle]:
+        """Trả về các Bài gốc mới của Nguồn ở `url` kể từ `since`.
 
         Ném lỗi khi không lấy được; nơi gọi chịu trách nhiệm ghi lại và đi tiếp.
         """

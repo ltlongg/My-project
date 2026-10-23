@@ -11,215 +11,218 @@ import httpx
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
-from bulletin.agents.bien_tap import BienTap
-from bulletin.agents.kiem_chung import KiemChung
-from bulletin.cau_hinh import CauHinh
-from bulletin.chay_ky import ChayKy
-from bulletin.collectors.rss import ThuThapRss
-from bulletin.csdl import mo_kho_trang_thai, nang_cap, tao_engine, tao_mo_phien
-from bulletin.embeddings.endpoint import NhungQuaEndpoint
-from bulletin.extractors.bai_bao import LayBaiBao
-from bulletin.khoi_tao import MA_CONG_NGHE, khoi_tao
-from bulletin.mo_hinh import KetQuaKy, LoaiKenhDang, LoaiNguon
-from bulletin.publishers.telegram import PhatTelegram
-from bulletin.search import BoTimKiem
-from bulletin.search.brave import TimKiemBrave
-from bulletin.search.tavily import TimKiemTavily
-from bulletin.thu_llm import (
-    EndpointLLM,
-    LoiEndpoint,
-    bao_cao,
-    don_dap,
-    thu_nhieu_model,
-    thu_nhung,
+from bulletin.agents.editor import Editor
+from bulletin.agents.verifier import Verifier
+from bulletin.collectors.rss import RssCollector
+from bulletin.config import Settings
+from bulletin.db import make_engine, make_session_factory, open_checkpointer, upgrade
+from bulletin.embeddings.endpoint import EndpointEmbedder
+from bulletin.extractors.article import ArticleExtractor
+from bulletin.llm_probe import (
+    EndpointError,
+    LLMEndpoint,
+    burst,
+    probe_embedding,
+    probe_models,
+    report,
 )
+from bulletin.models import ChannelKind, RunOutcome, SourceKind
+from bulletin.publishers.telegram import TelegramPublisher
+from bulletin.runner import Runner
+from bulletin.search import Searcher
+from bulletin.search.brave import BraveSearch
+from bulletin.search.tavily import TavilySearch
+from bulletin.seed import TECH_SLUG, seed
 
-NHAN_KET_QUA = {
-    KetQuaKy.DA_PHAT: "Đã phát",
-    KetQuaKy.KHONG_PHAT: "Không phát",
-    KetQuaKy.HONG: "Hỏng",
+OUTCOME_LABELS = {
+    RunOutcome.PUBLISHED: "Đã phát",
+    RunOutcome.NOT_PUBLISHED: "Không phát",
+    RunOutcome.FAILED: "Hỏng",
 }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    for luong in (sys.stdout, sys.stderr):
+    for stream in (sys.stdout, sys.stderr):
         # Console Windows mặc định không in được tiếng Việt khi đầu ra bị chuyển hướng.
-        if isinstance(luong, io.TextIOWrapper):
-            luong.reconfigure(encoding="utf-8")
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8")
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     # httpx ghi lại địa chỉ từng lời gọi, mà địa chỉ của Telegram có chứa token của bot.
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    phan_tich = argparse.ArgumentParser(prog="bulletin", description=__doc__)
-    lenh = phan_tich.add_subparsers(dest="lenh", required=True)
-    lenh.add_parser("khoi-tao", help="Nâng cấp lược đồ và nạp dữ liệu khởi tạo")
-    lenh_chay_ky = lenh.add_parser("chay-ky", help="Chạy một Kỳ cho một Chuyên mục ngay bây giờ")
-    lenh_chay_ky.add_argument("chuyen_muc", nargs="?", default=MA_CONG_NGHE, help="Mã Chuyên mục")
-    lenh_chay_ky.add_argument(
-        "--tiep",
+    parser = argparse.ArgumentParser(prog="bulletin", description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("init", help="Nâng cấp lược đồ và nạp dữ liệu khởi tạo")
+    run_command = commands.add_parser("run", help="Chạy một Kỳ cho một Chuyên mục ngay bây giờ")
+    run_command.add_argument("section", nargs="?", default=TECH_SLUG, help="Mã Chuyên mục")
+    run_command.add_argument(
+        "--resume",
         action="store_true",
         help="Chạy tiếp Kỳ gần nhất nếu nó bị gián đoạn giữa chừng, thay vì chạy một Kỳ mới",
     )
-    lenh_thu_llm = lenh.add_parser(
-        "thu-llm", help="Thử từng model của endpoint LLM và in báo cáo markdown"
+    probe_command = commands.add_parser(
+        "probe-llm", help="Thử từng model của endpoint LLM và in báo cáo markdown"
     )
-    lenh_thu_llm.add_argument("model", nargs="*", help="Model cần thử; bỏ trống là mọi model")
-    lenh_thu_llm.add_argument(
-        "--nhung", default="text-embedding-3-small", help="Model dùng để thử tạo vector nhúng"
+    probe_command.add_argument("model", nargs="*", help="Model cần thử; bỏ trống là mọi model")
+    probe_command.add_argument(
+        "--embedding", default="text-embedding-3-small", help="Model dùng để thử tạo vector nhúng"
     )
-    lenh_thu_llm.add_argument(
-        "--don-dap",
+    probe_command.add_argument(
+        "--burst",
         nargs=2,
-        metavar=("MODEL", "SO_LOI_GOI"),
+        metavar=("MODEL", "CALL_COUNT"),
         help="Gửi cùng lúc ngần ấy lời gọi tới một model để xem endpoint trả gì khi bị dồn",
     )
-    tham_so = phan_tich.parse_args(argv)
+    args = parser.parse_args(argv)
 
-    cau_hinh = CauHinh()
-    if tham_so.lenh == "thu-llm":
-        return _thu_llm(cau_hinh, tham_so)
+    settings = Settings()
+    if args.command == "probe-llm":
+        return _probe_llm(settings, args)
 
-    engine = tao_engine(cau_hinh.database_url)
-    mo_phien = tao_mo_phien(engine)
+    engine = make_engine(settings.database_url)
+    session_factory = make_session_factory(engine)
 
-    if tham_so.lenh == "khoi-tao":
-        nang_cap(engine)
-        khoi_tao(mo_phien, cau_hinh.telegram_chat_id)
-        if not cau_hinh.telegram_chat_id:
+    if args.command == "init":
+        upgrade(engine)
+        seed(session_factory, settings.telegram_chat_id)
+        if not settings.telegram_chat_id:
             print("Chưa có TELEGRAM_CHAT_ID nên chưa tạo Kênh đăng; điền vào .env rồi chạy lại.")
         print("Đã nạp dữ liệu khởi tạo.")
         return 0
 
-    khoa_tim_kiem = {"tavily": cau_hinh.tavily_api_key, "brave": cau_hinh.brave_api_key}
-    model_bien_tap = cau_hinh.model_bien_tap or cau_hinh.model
-    model_kiem_chung = cau_hinh.model_kiem_chung or cau_hinh.model
-    thieu = [
-        ten
-        for ten, gia_tri in {
-            "TELEGRAM_BOT_TOKEN": cau_hinh.telegram_bot_token,
-            "OPENAI_BASE_URL": cau_hinh.openai_base_url,
-            "OPENAI_API_KEY": cau_hinh.openai_api_key,
-            "MODEL_BIEN_TAP hoặc MODEL": model_bien_tap,
-            "MODEL_KIEM_CHUNG hoặc MODEL": model_kiem_chung,
-            f"{cau_hinh.cong_cu_tim_kiem.upper()}_API_KEY": khoa_tim_kiem[
-                cau_hinh.cong_cu_tim_kiem
-            ],
+    search_keys = {"tavily": settings.tavily_api_key, "brave": settings.brave_api_key}
+    editor_model = settings.editor_model or settings.model
+    verifier_model = settings.verifier_model or settings.model
+    missing = [
+        name
+        for name, value in {
+            "TELEGRAM_BOT_TOKEN": settings.telegram_bot_token,
+            "OPENAI_BASE_URL": settings.openai_base_url,
+            "OPENAI_API_KEY": settings.openai_api_key,
+            "EDITOR_MODEL hoặc MODEL": editor_model,
+            "VERIFIER_MODEL hoặc MODEL": verifier_model,
+            f"{settings.search_provider.upper()}_API_KEY": search_keys[settings.search_provider],
         }.items()
-        if not gia_tri
+        if not value
     ]
-    if thieu:
-        print(f"Thiếu {', '.join(thieu)}; điền vào .env rồi chạy lại.", file=sys.stderr)
+    if missing:
+        print(f"Thiếu {', '.join(missing)}; điền vào .env rồi chạy lại.", file=sys.stderr)
         return 2
-    assert cau_hinh.telegram_bot_token and cau_hinh.openai_api_key
-    assert model_bien_tap and model_kiem_chung
+    assert settings.telegram_bot_token and settings.openai_api_key
+    assert editor_model and verifier_model
     with (
         httpx.Client(
             timeout=20, headers={"User-Agent": "Mozilla/5.0 (compatible; bulletin/0.1)"}
         ) as client,
         # Model nhúng chạy trên CPU: một lô văn bản có thể mất vài chục giây.
-        httpx.Client(timeout=httpx.Timeout(300, connect=10)) as client_nhung,
-        mo_kho_trang_thai(engine) as kho_trang_thai,
+        httpx.Client(timeout=httpx.Timeout(300, connect=10)) as embedding_client,
+        open_checkpointer(engine) as checkpointer,
     ):
-        tim_kiem: BoTimKiem = (
-            TimKiemBrave(client, cau_hinh.brave_api_key or "")
-            if cau_hinh.cong_cu_tim_kiem == "brave"
-            else TimKiemTavily(client, cau_hinh.tavily_api_key or "")
+        searcher: Searcher = (
+            BraveSearch(client, settings.brave_api_key or "")
+            if settings.search_provider == "brave"
+            else TavilySearch(client, settings.tavily_api_key or "")
         )
-        chay_ky = ChayKy(
-            mo_phien,
-            bo_thu_thap={LoaiNguon.RSS: ThuThapRss(client)},
-            bo_phat={LoaiKenhDang.TELEGRAM: PhatTelegram(client, cau_hinh.telegram_bot_token)},
-            lay_noi_dung=LayBaiBao(client),
-            bo_nhung=NhungQuaEndpoint(
-                client_nhung,
-                cau_hinh.nhung_base_url,
-                cau_hinh.model_nhung,
-                cau_hinh.nhung_api_key,
+        runner = Runner(
+            session_factory,
+            collectors={SourceKind.RSS: RssCollector(client)},
+            publishers={
+                ChannelKind.TELEGRAM: TelegramPublisher(client, settings.telegram_bot_token)
+            },
+            extractor=ArticleExtractor(client),
+            embedder=EndpointEmbedder(
+                embedding_client,
+                settings.embedding_base_url,
+                settings.embedding_model,
+                settings.embedding_api_key,
             ),
-            bien_tap=BienTap(
-                _llm(cau_hinh, model_bien_tap),
-                KiemChung(_llm(cau_hinh, model_kiem_chung)),
-                tim_kiem,
-                kho_trang_thai,
+            editor=Editor(
+                _llm(settings, editor_model),
+                Verifier(_llm(settings, verifier_model)),
+                searcher,
+                checkpointer,
             ),
         )
         try:
-            if tham_so.tiep:
-                ky = chay_ky.chay_tiep(tham_so.chuyen_muc)
+            if args.resume:
+                record = runner.resume(args.section)
             else:
-                ky = chay_ky.chay(tham_so.chuyen_muc, datetime.now(UTC))
-        except LookupError as loi:
-            print(f"{loi}. Đã chạy `bulletin khoi-tao` chưa?", file=sys.stderr)
+                record = runner.run(args.section, datetime.now(UTC))
+        except LookupError as error:
+            print(f"{error}. Đã chạy `bulletin init` chưa?", file=sys.stderr)
             return 2
 
-    if ky is None:
+    if record is None:
         print("Kỳ gần nhất đã có kết quả; không có gì để chạy tiếp.")
         return 0
-    assert ky.ket_qua is not None
-    print(f"{NHAN_KET_QUA[ky.ket_qua]}" + (f": {ky.li_do}" if ky.li_do else ""))
-    if ky.phien_ban_huong_dan_bien_tap is not None:
+    assert record.outcome is not None
+    print(f"{OUTCOME_LABELS[record.outcome]}" + (f": {record.reason}" if record.reason else ""))
+    if record.editor_guideline_version is not None:
         print(
-            f"Hướng dẫn của Biên tập: phiên bản {ky.phien_ban_huong_dan_bien_tap}; "
-            f"của Kiểm chứng: phiên bản {ky.phien_ban_huong_dan_kiem_chung}"
+            f"Hướng dẫn của Biên tập: phiên bản {record.editor_guideline_version}; "
+            f"của Kiểm chứng: phiên bản {record.verifier_guideline_version}"
         )
-    for thu_tu, tin in enumerate(ky.ban_tin.tin if ky.ban_tin else (), start=1):
-        print(f"  {thu_tu}. {tin.tieu_de_kem_nhan}\n     {tin.tom_tat}\n     {tin.dia_chi}")
-    return 1 if ky.ket_qua is KetQuaKy.HONG else 0
+    stories = record.bulletin.stories if record.bulletin else ()
+    for position, story in enumerate(stories, start=1):
+        print(f"  {position}. {story.labeled_title}\n     {story.summary}\n     {story.url}")
+    return 1 if record.outcome is RunOutcome.FAILED else 0
 
 
-def _llm(cau_hinh: CauHinh, model: str) -> ChatOpenAI:
+def _llm(settings: Settings, model: str) -> ChatOpenAI:
     return ChatOpenAI(
         model=model,
-        base_url=cau_hinh.openai_base_url,
-        api_key=SecretStr(cau_hinh.openai_api_key or ""),
+        base_url=settings.openai_base_url,
+        api_key=SecretStr(settings.openai_api_key or ""),
         # Model suy luận có thể nghĩ rất lâu trước khi trả chữ đầu tiên.
         timeout=300,
         max_retries=3,
     )
 
 
-def _thu_llm(cau_hinh: CauHinh, tham_so: argparse.Namespace) -> int:
-    if not cau_hinh.openai_base_url or not cau_hinh.openai_api_key:
+def _probe_llm(settings: Settings, args: argparse.Namespace) -> int:
+    if not settings.openai_base_url or not settings.openai_api_key:
         print(
             "Thiếu OPENAI_BASE_URL hoặc OPENAI_API_KEY; điền vào .env rồi chạy lại.",
             file=sys.stderr,
         )
         return 2
-    dia_chi, khoa = cau_hinh.openai_base_url, cau_hinh.openai_api_key
+    base_url, api_key = settings.openai_base_url, settings.openai_api_key
     # Model suy luận có thể nghĩ rất lâu trước khi trả chữ đầu tiên.
     with httpx.Client(timeout=httpx.Timeout(300, connect=10)) as client:
-        endpoint = EndpointLLM(client, dia_chi, khoa)
+        endpoint = LLMEndpoint(client, base_url, api_key)
         try:
-            cac_model = tham_so.model or endpoint.cac_model()
-        except LoiEndpoint as loi:
-            print(f"Không lấy được danh sách model: {loi}", file=sys.stderr)
+            models = args.model or endpoint.models()
+        except EndpointError as error:
+            print(f"Không lấy được danh sách model: {error}", file=sys.stderr)
             return 1
-        ket_qua = thu_nhieu_model(endpoint, cac_model)
-        print("## Từng model", "", bao_cao(ket_qua), sep="\n")
+        results = probe_models(endpoint, models)
+        print("## Từng model", "", report(results), sep="\n")
 
-        nhung = thu_nhung(endpoint, tham_so.nhung)
-        ket_luan = "đạt" if nhung.dat else "KHÔNG"
+        embedding = probe_embedding(endpoint, args.embedding)
+        verdict = "đạt" if embedding.passed else "KHÔNG"
         print("", "## Vector nhúng", "", sep="\n")
-        print(f"- `{tham_so.nhung}`: {ket_luan}, {nhung.ghi_chu}")
+        print(f"- `{args.embedding}`: {verdict}, {embedding.note}")
 
-        model_song = next((kq.model for kq in ket_qua if kq.phep_thu["goi_thuong"].dat), None)
-        tu_choi = {
-            "Khoá sai": (EndpointLLM(client, dia_chi, "sk-sai"), model_song or cac_model[0]),
-            "Model không tồn tại": (endpoint, "khong-co/model-nay"),
+        working_model = next(
+            (result.model for result in results if result.checks["basic_call"].passed), None
+        )
+        rejections = {
+            "Khoá sai": (LLMEndpoint(client, base_url, "sk-invalid"), working_model or models[0]),
+            "Model không tồn tại": (endpoint, "no-such/model"),
         }
         print("", "## Khi endpoint từ chối", "", sep="\n")
-        for tinh_huong, (noi_goi, model) in tu_choi.items():
+        for case, (target, model) in rejections.items():
             try:
-                noi_goi.tro_chuyen(model, [{"role": "user", "content": "xin chào"}])
-                print(f"- {tinh_huong}: endpoint vẫn trả lời")
-            except LoiEndpoint as loi:
-                print(f"- {tinh_huong}: {loi}")
+                target.chat(model, [{"role": "user", "content": "xin chào"}])
+                print(f"- {case}: endpoint vẫn trả lời")
+            except EndpointError as error:
+                print(f"- {case}: {error}")
 
-        if tham_so.don_dap:
-            model, so_loi_goi = tham_so.don_dap[0], int(tham_so.don_dap[1])
-            print("", f"## {so_loi_goi} lời gọi cùng lúc tới `{model}`", "", sep="\n")
-            for ket_qua_goi, so_lan in don_dap(endpoint, model, so_loi_goi).most_common():
-                print(f"- {so_lan} lần: {ket_qua_goi}")
+        if args.burst:
+            model, call_count = args.burst[0], int(args.burst[1])
+            print("", f"## {call_count} lời gọi cùng lúc tới `{model}`", "", sep="\n")
+            for outcome, count in burst(endpoint, model, call_count).most_common():
+                print(f"- {count} lần: {outcome}")
     return 0

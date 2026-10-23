@@ -5,70 +5,72 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from bulletin.publishers import NoiDungBanTin, do_dai
+from bulletin.publishers import BulletinContent, text_length
 
-GIO_VIET_NAM = ZoneInfo("Asia/Ho_Chi_Minh")
+VIETNAM_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 # Giới hạn của Telegram cho một tin nhắn chữ.
-GIOI_HAN_TIN_NHAN = 4096
-TIEU_DE_TOI_DA = 300
+MESSAGE_LIMIT = 4096
+MAX_TITLE_LENGTH = 300
 
 
-class LoiPhatTelegram(Exception):
+class TelegramPublishError(Exception):
     pass
 
 
-class PhatTelegram:
+class TelegramPublisher:
     def __init__(self, client: httpx.Client, token: str) -> None:
         self._client = client
         self._token = token
 
-    def phat(self, dia_chi: str, ban_tin: NoiDungBanTin) -> None:
-        for van_ban in dung_tin_nhan(ban_tin):
-            self._gui(dia_chi, van_ban)
+    def publish(self, address: str, bulletin: BulletinContent) -> None:
+        for text in build_messages(bulletin):
+            self._send(address, text)
 
-    def _gui(self, ma_tro_chuyen: str, van_ban: str) -> None:
+    def _send(self, chat_id: str, text: str) -> None:
         try:
-            phan_hoi = self._client.post(
+            response = self._client.post(
                 f"https://api.telegram.org/bot{self._token}/sendMessage",
                 json={
-                    "chat_id": ma_tro_chuyen,
-                    "text": van_ban,
+                    "chat_id": chat_id,
+                    "text": text,
                     "parse_mode": "HTML",
                     "link_preview_options": {"is_disabled": True},
                 },
             )
-        except httpx.HTTPError as loi:
+        except httpx.HTTPError as error:
             # Không nối lỗi gốc vào: nó mang theo địa chỉ có chứa token của bot.
-            raise LoiPhatTelegram(
-                f"Không kết nối được tới Telegram ({type(loi).__name__})"
+            raise TelegramPublishError(
+                f"Không kết nối được tới Telegram ({type(error).__name__})"
             ) from None
 
         try:
-            ket_qua = phan_hoi.json()
+            result = response.json()
         except ValueError:
-            ket_qua = None
-        if not isinstance(ket_qua, dict) or not ket_qua.get("ok"):
-            mo_ta = isinstance(ket_qua, dict) and ket_qua.get("description")
-            raise LoiPhatTelegram(f"Telegram từ chối: {mo_ta or f'mã {phan_hoi.status_code}'}")
+            result = None
+        if not isinstance(result, dict) or not result.get("ok"):
+            description = isinstance(result, dict) and result.get("description")
+            raise TelegramPublishError(
+                f"Telegram từ chối: {description or f'mã {response.status_code}'}"
+            )
 
 
-def dung_tin_nhan(ban_tin: NoiDungBanTin) -> list[str]:
+def build_messages(bulletin: BulletinContent) -> list[str]:
     """Dựng Bản tin thành các tin nhắn HTML, mỗi tin nhắn trong giới hạn của Telegram."""
-    ngay = ban_tin.thoi_diem.astimezone(GIO_VIET_NAM).strftime("%d/%m/%Y")
-    cac_doan = [f"<b>Bản tin {escape(ban_tin.chuyen_muc)}</b> · {ngay}"]
-    for thu_tu, tin in enumerate(ban_tin.tin, start=1):
-        tieu_de = tin.tieu_de_kem_nhan
-        if len(tieu_de) > TIEU_DE_TOI_DA:
-            tieu_de = tieu_de[: TIEU_DE_TOI_DA - 1] + "…"
-        cac_doan.append(
-            f'{thu_tu}. <a href="{escape(tin.dia_chi)}"><b>{escape(tieu_de)}</b></a>\n'
-            f"{escape(tin.tom_tat)}"
+    date = bulletin.run_at.astimezone(VIETNAM_TZ).strftime("%d/%m/%Y")
+    blocks = [f"<b>Bản tin {escape(bulletin.section)}</b> · {date}"]
+    for position, story in enumerate(bulletin.stories, start=1):
+        title = story.labeled_title
+        if len(title) > MAX_TITLE_LENGTH:
+            title = title[: MAX_TITLE_LENGTH - 1] + "…"
+        blocks.append(
+            f'{position}. <a href="{escape(story.url)}"><b>{escape(title)}</b></a>\n'
+            f"{escape(story.summary)}"
         )
 
-    tin_nhan: list[str] = []
-    for doan in cac_doan:
-        if tin_nhan and do_dai(tin_nhan[-1]) + 2 + do_dai(doan) <= GIOI_HAN_TIN_NHAN:
-            tin_nhan[-1] += "\n\n" + doan
+    messages: list[str] = []
+    for block in blocks:
+        if messages and text_length(messages[-1]) + 2 + text_length(block) <= MESSAGE_LIMIT:
+            messages[-1] += "\n\n" + block
         else:
-            tin_nhan.append(doan)
-    return tin_nhan
+            messages.append(block)
+    return messages
