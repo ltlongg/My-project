@@ -9,19 +9,29 @@ from sqlalchemy import func, literal, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
+from bulletin import gom_tin
+from bulletin.agents import bien_tap
+from bulletin.agents.bien_tap import BienTap, DeBai, LoiBienTap
+from bulletin.agents.kiem_chung import LoiKiemChung
 from bulletin.collectors import BaiGocMoi, BoThuThap
 from bulletin.dia_chi import chuan_hoa
+from bulletin.embeddings import BoNhung
+from bulletin.extractors import BoLayNoiDung
 from bulletin.mo_hinh import (
     BaiGoc,
     BanTin,
     ChuyenMuc,
+    HuongDan,
     KenhDang,
     KetQuaKy,
     Ky,
     LoaiKenhDang,
     LoaiNguon,
+    LuotKiemChung,
     Nguon,
     Tin,
+    UngVien,
+    VaiTro,
     bai_goc_nguon,
     chuyen_muc_nguon,
 )
@@ -31,6 +41,13 @@ log = logging.getLogger(__name__)
 
 # Kỳ đầu tiên của một Chuyên mục chưa có Bản tin trước để làm mốc.
 KHOANG_LAN_DAU = timedelta(hours=24)
+# Số Bài gốc mới nhất của Kỳ được đưa vào Gom Tin; chặn trên để một Nguồn bất thường không làm
+# Kỳ chậm đi nhiều.
+SO_BAI_GOC_TOI_DA = 500
+# Số ứng viên Tin mới nhất đưa cho Biên tập, cho tới khi có bước sơ tuyển (ticket 07).
+SO_UNG_VIEN_TOI_DA = 30
+# Bản tin có ít Tin qua Kiểm chứng hơn số này thì không phát, coi như Kỳ hỏng.
+SO_TIN_TOI_THIEU = 3
 
 
 @dataclass(frozen=True)
@@ -42,6 +59,9 @@ class KyDaChay:
     ket_qua: KetQuaKy | None
     li_do: str | None
     ban_tin: NoiDungBanTin | None
+    # Phiên bản Hướng dẫn mà Biên tập và Kiểm chứng đã dùng; chưa tới bước Biên tập thì để trống.
+    phien_ban_huong_dan_bien_tap: int | None = None
+    phien_ban_huong_dan_kiem_chung: int | None = None
 
 
 class ChayKy:
@@ -50,10 +70,16 @@ class ChayKy:
         mo_phien: sessionmaker[Session],
         bo_thu_thap: Mapping[LoaiNguon, BoThuThap],
         bo_phat: Mapping[LoaiKenhDang, BoPhat],
+        lay_noi_dung: BoLayNoiDung,
+        bo_nhung: BoNhung,
+        bien_tap: BienTap,
     ) -> None:
         self._mo_phien = mo_phien
         self._bo_thu_thap = bo_thu_thap
         self._bo_phat = bo_phat
+        self._lay_noi_dung = lay_noi_dung
+        self._bo_nhung = bo_nhung
+        self._bien_tap = bien_tap
 
     def chay(self, ma_chuyen_muc: str, thoi_diem: datetime) -> KyDaChay:
         """Chạy một Kỳ cho Chuyên mục `ma_chuyen_muc` tại `thoi_diem`."""
@@ -66,44 +92,158 @@ class ChayKy:
             phien.add(ky)
             # Kỳ được lưu trước khi làm gì khác, để lỗi nào cũng để lại một Kỳ có kết quả.
             phien.commit()
-            try:
-                ky.ket_qua, ky.li_do = self._lam_ban_tin(phien, ky, moc)
-            except Exception as loi:
-                log.exception("Kỳ của Chuyên mục %s gặp lỗi không lường trước", ma_chuyen_muc)
-                phien.rollback()
-                ky.ket_qua = KetQuaKy.HONG
-                ky.li_do = f"Lỗi không lường trước: {str(loi).splitlines()[0]}"
-            phien.commit()
-            return _da_chay(ky)
+            return self._hoan_tat(phien, ky, moc)
+
+    def chay_tiep(self, ma_chuyen_muc: str) -> KyDaChay | None:
+        """Chạy tiếp Kỳ gần nhất của Chuyên mục nếu nó bị gián đoạn giữa chừng.
+
+        Biên tập làm tiếp từ bước đang dở chứ không làm lại từ đầu. Trả về None khi Kỳ gần nhất
+        đã có kết quả, tức là không có gì để chạy tiếp.
+        """
+        with self._mo_phien() as phien:
+            chuyen_muc = _chuyen_muc(phien, ma_chuyen_muc)
+            ky = phien.scalar(
+                select(Ky)
+                .where(Ky.chuyen_muc_id == chuyen_muc.id)
+                .order_by(Ky.thoi_diem.desc(), Ky.id.desc())
+                .limit(1)
+            )
+            if ky is None or ky.ket_qua is not None:
+                return None
+            return self._hoan_tat(phien, ky, _moc(phien, chuyen_muc, ky.thoi_diem))
+
+    def _hoan_tat(self, phien: Session, ky: Ky, moc: datetime) -> KyDaChay:
+        """Làm Bản tin cho một Kỳ đã lưu và ghi kết quả vào nó."""
+        try:
+            ky.ket_qua, ky.li_do = self._lam_ban_tin(phien, ky, moc)
+        except Exception as loi:
+            phien.rollback()
+            log.exception("Kỳ của Chuyên mục %s gặp lỗi không lường trước", ky.chuyen_muc.ma)
+            ky.ket_qua = KetQuaKy.HONG
+            ky.li_do = f"Lỗi không lường trước: {str(loi).splitlines()[0]}"
+        phien.commit()
+        return _da_chay(ky)
 
     def _lam_ban_tin(self, phien: Session, ky: Ky, moc: datetime) -> tuple[KetQuaKy, str | None]:
-        """Thu thập, dựng Bản tin và phát; trả về kết quả của Kỳ kèm lí do."""
+        """Thu thập, gom Tin, để Biên tập dựng Bản tin và Kiểm chứng xét nó, rồi phát; trả về kết
+        quả của Kỳ kèm lí do.
+
+        Mọi bước đều làm lại được trên cùng một Kỳ, để Kỳ bị gián đoạn chạy tiếp được.
+        """
         chuyen_muc = ky.chuyen_muc
         if not chuyen_muc.nguon:
             return KetQuaKy.HONG, "Chuyên mục chưa có Nguồn nào"
+        if ky.huong_dan_bien_tap is None:
+            ky.huong_dan_bien_tap = phien.scalar(
+                select(HuongDan).where(
+                    HuongDan.vai_tro == VaiTro.BIEN_TAP,
+                    HuongDan.chuyen_muc_id == chuyen_muc.id,
+                    HuongDan.co_hieu_luc,
+                )
+            )
+        if ky.huong_dan_bien_tap is None:
+            return KetQuaKy.HONG, "Chuyên mục chưa có Hướng dẫn cho Biên tập"
+        if ky.huong_dan_kiem_chung is None:
+            ky.huong_dan_kiem_chung = phien.scalar(
+                select(HuongDan).where(
+                    HuongDan.vai_tro == VaiTro.KIEM_CHUNG,
+                    HuongDan.chuyen_muc_id.is_(None),
+                    HuongDan.co_hieu_luc,
+                )
+            )
+        if ky.huong_dan_kiem_chung is None:
+            return KetQuaKy.HONG, "Chưa có Hướng dẫn cho Kiểm chứng"
         lay_duoc = [self._thu_thap(phien, nguon, moc, ky.thoi_diem) for nguon in chuyen_muc.nguon]
         phien.commit()
         if not any(lay_duoc):
             # Hỏng chứ không phải "không phát": thử lại sau có thể lấy được.
             return KetQuaKy.HONG, "Không thu thập được Nguồn nào"
-
-        bai_goc = _bai_goc_trong_ky(phien, chuyen_muc, moc, ky.thoi_diem)
-        if not bai_goc:
-            return KetQuaKy.KHONG_PHAT, "Không có Bài gốc mới"
-        ky.ban_tin = BanTin(
-            tin=[
-                Tin(thu_tu=thu_tu, tieu_de=bai.tieu_de, bai_goc_chinh=bai)
-                for thu_tu, bai in enumerate(bai_goc, start=1)
-            ]
-        )
-        # Bản tin được lưu trước khi phát, để Kỳ hỏng vẫn cho thấy nó định gửi gì.
-        phien.commit()
-
+        # Xét trước khi gọi Agent, để không tốn lời gọi LLM cho Bản tin không có nơi phát.
         if not chuyen_muc.kenh_dang:
             return KetQuaKy.HONG, "Chuyên mục chưa có Kênh đăng nào"
+
+        if ky.ban_tin is None:
+            # Ứng viên được lưu một lần; Kỳ chạy tiếp dùng lại đúng các ứng viên Biên tập đã thấy.
+            if not ky.ung_vien:
+                try:
+                    ky.ung_vien = self._gom_ung_vien(phien, chuyen_muc, moc, ky.thoi_diem)
+                except Exception as loi:
+                    phien.rollback()
+                    log.exception("Gom Tin của Chuyên mục %s gặp lỗi", chuyen_muc.ma)
+                    return KetQuaKy.HONG, f"Gom Tin gặp lỗi: {str(loi).splitlines()[0]}"
+                phien.commit()
+            if not ky.ung_vien:
+                return KetQuaKy.KHONG_PHAT, "Không có Bài gốc mới"
+            de_bai = DeBai(
+                chuyen_muc=chuyen_muc.ten,
+                thoi_diem=ky.thoi_diem,
+                huong_dan=ky.huong_dan_bien_tap.noi_dung,
+                huong_dan_kiem_chung=ky.huong_dan_kiem_chung.noi_dung,
+                so_tin_toi_da=chuyen_muc.so_tin_toi_da,
+                ung_vien=[_cho_bien_tap(uv, chuyen_muc) for uv in ky.ung_vien],
+            )
+            # Biên tập làm việc lâu; không giữ giao dịch nào mở trong lúc đó.
+            phien.commit()
+            try:
+                tin_da_viet = self._bien_tap.lam(f"ky-{ky.id}-bien-tap", de_bai, self._doc_bai_goc)
+            except (LoiBienTap, LoiKiemChung) as loi:
+                return KetQuaKy.HONG, str(loi)
+            except Exception as loi:
+                log.exception("Biên tập của Chuyên mục %s gặp lỗi", chuyen_muc.ma)
+                return KetQuaKy.HONG, f"Biên tập gặp lỗi: {str(loi).splitlines()[0]}"
+            ung_vien_chua = {bai.id: uv for uv in ky.ung_vien for bai in uv.bai_goc}
+            ky.ban_tin = BanTin(
+                tin=[
+                    Tin(
+                        thu_tu=thu_tu,
+                        tieu_de=tin.tieu_de,
+                        tom_tat=tin.tom_tat,
+                        li_do=tin.li_do,
+                        ung_vien=ung_vien_chua[tin.ma_bai_goc],
+                        bai_goc_chinh_id=tin.ma_bai_goc,
+                        li_do_bo=tin.li_do_bo,
+                        luot_kiem_chung=[
+                            LuotKiemChung(
+                                lan=lan,
+                                tieu_de=ban.tieu_de,
+                                tom_tat=ban.tom_tat,
+                                dat=ban.dat,
+                                li_do=ban.li_do,
+                            )
+                            for lan, ban in enumerate(tin.ban_viet, start=1)
+                        ],
+                    )
+                    for thu_tu, tin in enumerate(tin_da_viet, start=1)
+                ]
+            )
+            # Bản tin được lưu trước khi phát, để Kỳ hỏng vẫn cho thấy nó định gửi gì.
+            phien.commit()
+
+        so_tin = len(_tin_duoc_phat(ky.ban_tin))
+        if so_tin < SO_TIN_TOI_THIEU:
+            return KetQuaKy.HONG, (
+                f"Chỉ {so_tin} Tin qua Kiểm chứng, dưới mức tối thiểu {SO_TIN_TOI_THIEU}; "
+                "Bản tin không được phát"
+            )
         loi_phat = self._phat(chuyen_muc.kenh_dang, _noi_dung(ky.ban_tin))
         da_toi = len(chuyen_muc.kenh_dang) - len(loi_phat)
         return (KetQuaKy.DA_PHAT if da_toi else KetQuaKy.HONG), "; ".join(loi_phat) or None
+
+    def _gom_ung_vien(
+        self, phien: Session, chuyen_muc: ChuyenMuc, moc: datetime, thoi_diem: datetime
+    ) -> list[UngVien]:
+        """Gom các Bài gốc của Kỳ thành ứng viên Tin, giữ những ứng viên mới nhất."""
+        nhom = gom_tin.gom(
+            phien,
+            self._bo_nhung,
+            chuyen_muc.id,
+            _bai_goc_cua_ky(phien, chuyen_muc, moc, thoi_diem),
+            thoi_diem,
+        )
+        return [
+            UngVien(thu_tu=thu_tu, bai_goc=list(n.bai_goc), tin_da_phat_id=n.tin_da_phat_id)
+            for thu_tu, n in enumerate(nhom[:SO_UNG_VIEN_TOI_DA], start=1)
+        ]
 
     def _thu_thap(self, phien: Session, nguon: Nguon, moc: datetime, thoi_diem: datetime) -> bool:
         """Lấy và lưu Bài gốc mới của một Nguồn; trả về có lấy được hay không.
@@ -121,6 +261,15 @@ class ChayKy:
             return False
         nguon.loi_gan_nhat = None
         return True
+
+    def _doc_bai_goc(self, ma: int) -> str:
+        """Toàn văn của một Bài gốc; lần đầu thì lấy về và lưu lại."""
+        with self._mo_phien() as phien:
+            bai_goc = phien.get_one(BaiGoc, ma)
+            if bai_goc.toan_van is None:
+                bai_goc.toan_van = self._lay_noi_dung.lay(bai_goc.dia_chi)
+                phien.commit()
+            return bai_goc.toan_van
 
     def _phat(self, kenh_dang: Sequence[KenhDang], noi_dung: NoiDungBanTin) -> list[str]:
         """Phát tới từng Kênh đăng; trả về lỗi của những Kênh đăng không phát được."""
@@ -156,8 +305,21 @@ def _noi_dung(ban_tin: BanTin) -> NoiDungBanTin:
     return NoiDungBanTin(
         chuyen_muc=ban_tin.ky.chuyen_muc.ten,
         thoi_diem=ban_tin.ky.thoi_diem,
-        tin=tuple(NoiDungTin(tin.tieu_de, tin.bai_goc_chinh.dia_chi) for tin in ban_tin.tin),
+        tin=tuple(
+            NoiDungTin(
+                tin.tieu_de,
+                tin.tom_tat,
+                tin.bai_goc_chinh.dia_chi,
+                cap_nhat=tin.cap_nhat_tin is not None,
+            )
+            for tin in _tin_duoc_phat(ban_tin)
+        ),
     )
+
+
+def _tin_duoc_phat(ban_tin: BanTin) -> list[Tin]:
+    """Các Tin đã qua Kiểm chứng, theo thứ tự Biên tập nộp."""
+    return [tin for tin in ban_tin.tin if tin.li_do_bo is None]
 
 
 def _da_chay(ky: Ky) -> KyDaChay:
@@ -166,6 +328,12 @@ def _da_chay(ky: Ky) -> KyDaChay:
         ket_qua=ky.ket_qua,
         li_do=ky.li_do,
         ban_tin=_noi_dung(ky.ban_tin) if ky.ban_tin else None,
+        phien_ban_huong_dan_bien_tap=(
+            ky.huong_dan_bien_tap.phien_ban if ky.huong_dan_bien_tap else None
+        ),
+        phien_ban_huong_dan_kiem_chung=(
+            ky.huong_dan_kiem_chung.phien_ban if ky.huong_dan_kiem_chung else None
+        ),
     )
 
 
@@ -194,6 +362,7 @@ def _luu_bai_goc(
                     "dia_chi_chuan_hoa": chuan_hoa_cua[bai.dia_chi],
                     "dia_chi": bai.dia_chi,
                     "tieu_de": bai.tieu_de,
+                    "mo_ta": bai.mo_ta,
                     # Nguồn ghi giờ xuất bản ở tương lai thì coi như vừa xuất hiện.
                     "xuat_hien_luc": min(bai.xuat_ban_luc or thoi_diem, thoi_diem),
                     "thu_thap_luc": thoi_diem,
@@ -213,22 +382,46 @@ def _luu_bai_goc(
     )
 
 
-def _bai_goc_trong_ky(
+def _bai_goc_cua_ky(
     phien: Session, chuyen_muc: ChuyenMuc, moc: datetime, thoi_diem: datetime
-) -> Sequence[BaiGoc]:
+) -> list[BaiGoc]:
     """Bài gốc từ Nguồn của Chuyên mục xuất hiện trong khoảng (moc, thoi_diem], mới nhất trước."""
     cua_chuyen_muc = (
         select(bai_goc_nguon.c.bai_goc_id)
         .join(chuyen_muc_nguon, chuyen_muc_nguon.c.nguon_id == bai_goc_nguon.c.nguon_id)
         .where(chuyen_muc_nguon.c.chuyen_muc_id == chuyen_muc.id)
     )
-    return phien.scalars(
-        select(BaiGoc)
-        .where(
-            BaiGoc.id.in_(cua_chuyen_muc),
-            BaiGoc.xuat_hien_luc > moc,
-            BaiGoc.xuat_hien_luc <= thoi_diem,
+    return list(
+        phien.scalars(
+            select(BaiGoc)
+            .where(
+                BaiGoc.id.in_(cua_chuyen_muc),
+                BaiGoc.xuat_hien_luc > moc,
+                BaiGoc.xuat_hien_luc <= thoi_diem,
+            )
+            .order_by(BaiGoc.xuat_hien_luc.desc(), BaiGoc.id)
+            .limit(SO_BAI_GOC_TOI_DA)
         )
-        .order_by(BaiGoc.xuat_hien_luc.desc(), BaiGoc.id)
-        .limit(chuyen_muc.so_tin_toi_da)
-    ).all()
+    )
+
+
+def _cho_bien_tap(ung_vien: UngVien, chuyen_muc: ChuyenMuc) -> bien_tap.UngVien:
+    """Ứng viên Tin như Biên tập thấy."""
+    tin = ung_vien.tin_da_phat
+    return bien_tap.UngVien(
+        bai_goc=tuple(
+            bien_tap.BaiGocUngVien(
+                ma=bai.id,
+                tieu_de=bai.tieu_de,
+                # Bài gốc có thể được thấy ở cả Nguồn của Chuyên mục khác.
+                nguon=next(nguon.ten for nguon in bai.nguon if nguon in chuyen_muc.nguon),
+                dia_chi=bai.dia_chi,
+                xuat_hien_luc=bai.xuat_hien_luc,
+                mo_ta=bai.mo_ta,
+            )
+            for bai in ung_vien.bai_goc
+        ),
+        tin_da_phat=(
+            bien_tap.TinDaPhat(tin.ban_tin.ky.thoi_diem, tin.tieu_de, tin.tom_tat) if tin else None
+        ),
+    )

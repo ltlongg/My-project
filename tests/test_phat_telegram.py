@@ -33,14 +33,18 @@ class TelegramGia:
         )
 
 
-def test_gui_ban_tin_thanh_mot_tin_nhan_gom_ten_chuyen_muc_ngay_va_cac_tieu_de_kem_link() -> None:
+def test_gui_ban_tin_thanh_mot_tin_nhan_gom_ten_chuyen_muc_ngay_va_tung_tin_kem_link() -> None:
     telegram = TelegramGia()
     ban_tin = NoiDungBanTin(
         chuyen_muc="Công nghệ",
         thoi_diem=luc(7, 8),
         tin=(
-            NoiDungTin('AT&T <mua> lại "X"', "https://bao.example/a?x=1&y=2"),
-            NoiDungTin("Bài B", "https://bao.example/b"),
+            NoiDungTin(
+                'AT&T <mua> lại "X"',
+                "Thương vụ trị giá <10 tỷ USD.",
+                "https://bao.example/a?x=1&y=2",
+            ),
+            NoiDungTin("Bài B", "Tóm tắt của Bài B.", "https://bao.example/b"),
         ),
     )
 
@@ -55,15 +59,48 @@ def test_gui_ban_tin_thanh_mot_tin_nhan_gom_ten_chuyen_muc_ngay_va_cac_tieu_de_k
                     "<b>Bản tin Công nghệ</b> · 07/10/2026\n"
                     "\n"
                     '1. <a href="https://bao.example/a?x=1&amp;y=2">'
-                    "AT&amp;T &lt;mua&gt; lại &quot;X&quot;</a>\n"
+                    "<b>AT&amp;T &lt;mua&gt; lại &quot;X&quot;</b></a>\n"
+                    "Thương vụ trị giá &lt;10 tỷ USD.\n"
                     "\n"
-                    '2. <a href="https://bao.example/b">Bài B</a>'
+                    '2. <a href="https://bao.example/b"><b>Bài B</b></a>\n'
+                    "Tóm tắt của Bài B."
                 ),
                 "parse_mode": "HTML",
                 "link_preview_options": {"is_disabled": True},
             },
         )
     ]
+
+
+def test_tin_cap_nhat_co_nhan_truoc_tieu_de() -> None:
+    telegram = TelegramGia()
+    ban_tin = NoiDungBanTin(
+        chuyen_muc="Công nghệ",
+        thoi_diem=luc(8, 8),
+        tin=(
+            NoiDungTin(
+                "Apple chốt giao iPhone Duo từ tháng 1/2027",
+                "Tóm tắt.",
+                "https://bao.example/duo",
+                cap_nhat=True,
+            ),
+        ),
+    )
+
+    PhatTelegram(telegram.client, TOKEN).phat(MA_TRO_CHUYEN, ban_tin)
+
+    [(_, tham_so)] = telegram.loi_goi
+    assert '1. <a href="https://bao.example/duo"><b>Cập nhật: Apple chốt giao iPhone Duo' in str(
+        tham_so["text"]
+    )
+
+
+def test_nhan_cap_nhat_duoc_tinh_vao_do_dai_cua_tin() -> None:
+    tin = NoiDungTin("Tiêu đề", "Tóm tắt.", "https://bao.example/a")
+
+    assert NoiDungTin(tin.tieu_de, tin.tom_tat, tin.dia_chi, cap_nhat=True).do_dai == (
+        tin.do_dai + len("Cập nhật: ")
+    )
 
 
 def test_ban_tin_dai_duoc_chia_thanh_nhieu_tin_nhan_trong_gioi_han_4096_ky_tu() -> None:
@@ -73,7 +110,7 @@ def test_ban_tin_dai_duoc_chia_thanh_nhieu_tin_nhan_trong_gioi_han_4096_ky_tu() 
         thoi_diem=luc(7, 8),
         # Hai Tin liền nhau vừa 4096 nếu đếm theo ký tự, nhưng vượt nếu đếm theo UTF-16.
         tin=tuple(
-            NoiDungTin(f"{so}" + "😀" * 299, f"https://bao.example/{so}/" + "a" * 1680)
+            NoiDungTin(f"{so}" + "😀" * 299, "Tóm tắt.", f"https://bao.example/{so}/" + "a" * 1680)
             for so in range(1, 8)
         ),
     )
@@ -111,7 +148,9 @@ def test_telegram_tu_choi_thi_bao_loi_kem_li_do(
 ) -> None:
     telegram = TelegramGia()
     telegram.tra_ve(ma, file_phan_hoi)
-    ban_tin = NoiDungBanTin("Công nghệ", luc(7, 8), (NoiDungTin("Bài A", "https://bao.example/a"),))
+    ban_tin = NoiDungBanTin(
+        "Công nghệ", luc(7, 8), (NoiDungTin("Bài A", "Tóm tắt.", "https://bao.example/a"),)
+    )
 
     with pytest.raises(LoiPhatTelegram) as loi:
         PhatTelegram(telegram.client, TOKEN).phat(MA_TRO_CHUYEN, ban_tin)
@@ -124,7 +163,9 @@ def test_loi_ket_noi_khong_lam_lo_token_cua_bot() -> None:
         raise httpx.ConnectError(f"không tới được {yeu_cau.url}", request=yeu_cau)
 
     client = httpx.Client(transport=httpx.MockTransport(mat_mang))
-    ban_tin = NoiDungBanTin("Công nghệ", luc(7, 8), (NoiDungTin("Bài A", "https://bao.example/a"),))
+    ban_tin = NoiDungBanTin(
+        "Công nghệ", luc(7, 8), (NoiDungTin("Bài A", "Tóm tắt.", "https://bao.example/a"),)
+    )
 
     with pytest.raises(LoiPhatTelegram) as loi:
         PhatTelegram(client, TOKEN).phat(MA_TRO_CHUYEN, ban_tin)

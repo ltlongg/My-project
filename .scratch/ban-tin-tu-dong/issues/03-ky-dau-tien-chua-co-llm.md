@@ -6,7 +6,7 @@ Ticket này đặt khung dự án (Python, Postgres, Docker Compose cho môi tr�
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-human
+**Status:** done
 
 - [x] Có một lối vào duy nhất "chạy một **Kỳ** cho **Chuyên mục** này tại thời điểm này"
 - [x] Bộ thu thập RSS và bộ phát Telegram nằm sau hai giao diện chung cho mọi loại **Nguồn** và mọi loại **Kênh đăng**
@@ -15,7 +15,7 @@ Ticket này đặt khung dự án (Python, Postgres, Docker Compose cho môi tr�
 - [x] Mỗi **Kỳ** được lưu lại với kết quả: đã phát, không phát, hoặc hỏng
 - [x] Test tại điểm "Chạy Kỳ" khẳng định về thứ tới **Kênh đăng** giả và thứ được lưu, không gọi mạng
 - [x] Bộ thu thập RSS và bộ phát Telegram có test riêng bằng dữ liệu đã ghi lại
-- [ ] Khi có token từ ticket 01, chạy lệnh thì tin nhắn xuất hiện trong nhóm Telegram thử
+- [x] Khi có token từ ticket 01, chạy lệnh thì tin nhắn xuất hiện trong nhóm Telegram thử
 - [x] Có hướng dẫn ngắn để dựng môi trường và chạy test bằng một lệnh
 
 ## Comments
@@ -31,3 +31,5 @@ Ghi chú cho các ticket sau:
 - Chuẩn hoá địa chỉ chưa gộp `http` với `https`, cũng chưa bỏ `www.`.
 - **Bản tin** dài bị chia thành nhiều tin nhắn; nếu tin nhắn sau lỗi thì tin nhắn trước đã gửi rồi, và thử lại sẽ gửi trùng. Thuộc ticket 09 ("không bao giờ phát hai lần cho cùng một **Kỳ**").
 - **Kỳ** bị ngắt giữa chừng (mất điện, tiến trình bị dừng) để lại một **Kỳ** chưa có kết quả; ticket 09 cần xử lí khi khởi động lại.
+
+**2026-10-08, agent.** Đã chạy thật với token từ ticket 01: `uv run bulletin khoi-tao` rồi `uv run bulletin chay-ky cong-nghe`. **Kỳ** kết thúc "Đã phát" với 7 **Tin** từ RSS của VnExpress; Telegram nhận tin nhắn gửi vào nhóm thử. Đóng ticket. Các ghi chú cho ticket sau ở trên vẫn còn nguyên giá trị.

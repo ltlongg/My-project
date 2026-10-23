@@ -221,11 +221,11 @@ Các mục hoãn có chủ đích được giữ ở `.scratch/backlog.md`.
 
 ### Cần thử trước khi dựa vào
 
-- Tool calling qua endpoint tương thích OpenAI với model định dùng. Thử trước tiên; nếu không được thì vòng agent gọi thẳng Gemini hoặc Anthropic.
+- ~~Tool calling qua endpoint tương thích OpenAI với model định dùng.~~ Đã thử ở ticket 02: chạy được, vòng agent đi qua endpoint. Kết quả có cấu trúc lấy bằng prompt hoặc tool calling, không dùng `response_format` kiểu `json_schema`. Chi tiết và model cho từng vai trò ở `docs/llm-endpoint.md`.
 - Zalo Bot có chủ động gửi tin cho người dùng được không. Nếu không, Zalo bị loại khỏi phạm vi.
 - Bài đăng lên Facebook Page từ app ở chế độ Development có hiện với người ngoài không; nếu không thì chuyển app sang Live.
 - Playwright có lấy được X và trang video YouTube từ IP server qua proxy không.
-- Endpoint có định tuyến được lời gọi tạo vector nhúng không; nếu không thì dùng một model nhúng tự chạy.
+- ~~Endpoint có định tuyến được lời gọi tạo vector nhúng không.~~ Đã thử ở ticket 02: không. Gom **Tin** dùng model nhúng tự chạy `BAAI/bge-m3`; ticket 06 kiểm lại lựa chọn này.
 
 ### Rủi ro đã biết và đã chấp nhận
 

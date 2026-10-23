@@ -1,4 +1,5 @@
-# Môi trường phát triển: chỉ có Postgres. Ứng dụng chạy trực tiếp trên máy bằng uv.
+# Môi trường phát triển: Postgres và dịch vụ tạo vector nhúng. Ứng dụng chạy trực tiếp trên máy
+# bằng uv.
 services:
   db:
     image: pgvector/pgvector:pg17
@@ -16,5 +17,23 @@ services:
       timeout: 3s
       retries: 30
 
+  # Model nhúng BAAI/bge-m3 để gom Tin, qua endpoint /v1/embeddings tương thích OpenAI. Lần đầu tải
+  # khoảng 2,3 GB model về volume `nhung`; khi chạy chiếm khoảng 3,2 GB RAM (xem docs/gom-tin.md).
+  nhung:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+    # Lô nhỏ thì lúc làm nóng model không cần nhiều RAM; Bài gốc được nhúng chỉ là tiêu đề và mô
+    # tả ngắn, nên cắt bớt văn bản dài không mất gì.
+    command: ["--model-id", "BAAI/bge-m3", "--max-batch-tokens", "2048", "--auto-truncate"]
+    ports:
+      - "127.0.0.1:${NHUNG_PORT:-54321}:80"
+    volumes:
+      - nhung:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 120
+
 volumes:
   db:
+  nhung:

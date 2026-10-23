@@ -1,0 +1,34 @@
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:media="http://search.yahoo.com/mrss/">
+    <channel>
+        <title>Công nghệ | Báo Thanh Niên</title>
+        <link>https://thanhnien.vn/cong-nghe.htm</link>
+        <description><![CDATA[Tin tức 24h, đọc báo TN cập nhật tin nóng online Việt Nam và thế giới mới nhất trong ngày, tin nhanh thời sự, chính trị, xã hội hôm nay, tin tức, top news VN]]></description>
+        <atom:link href="https://thanhnien.vn/rss/cong-nghe.rss" rel="self" type="application/rss+xml" />
+        <copyright>https://thanhnien.vn</copyright>
+        <generator>https://thanhnien.vn</generator>
+        <pubDate>Tue, 20 Oct 26 18:26:37 +0700</pubDate>
+        <language>vi-vn</language>
+        <lastBuildDate>Tue, 20 Oct 26 18:26:37 +0700</lastBuildDate>
+        <image>
+            <url>https://thanhnien-static.mediacdn.vn/thanhnien.vn/image/thanhnien-logo.png</url>
+            <title>Công nghệ | Báo Thanh Niên</title>
+            <link>https://thanhnien.vn/cong-nghe.htm</link>
+        </image>
+        <atom:link href="https://thanhnien.vn/cong-nghe.htm" rel="self" type="application/rss+xml"/>
+        <ttl>15</ttl>
+                    <item>
+                <title><![CDATA[Robot h&uacute;t bụi c&oacute; thể tiết lộ những g&igrave; về cuộc sống gia đ&igrave;nh?]]></title>
+                <link>https://thanhnien.vn/robot-hut-bui-co-the-tiet-lo-nhung-gi-ve-cuoc-song-gia-dinh-185261020145839698.htm</link>
+                <description><![CDATA[<a href="https://thanhnien.vn/robot-hut-bui-co-the-tiet-lo-nhung-gi-ve-cuoc-song-gia-dinh-185261020145839698.htm"><img src="https://images2.thanhnien.vn/zoom/600_315/528068263637045248/2026/10/20/1-17924822960001397967698-0-117-675-1197-crop-17924823019361011424591.jpg"></a> Robot h&uacute;t bụi c&oacute; thể thu thập h&igrave;nh ảnh, dữ liệu kh&ocirc;ng gian v&agrave; th&oacute;i quen sinh hoạt, l&agrave;m dấy l&ecirc;n lo ngại về quyền ri&ecirc;ng tư.]]></description>
+                <pubDate>Tue, 20 Oct 26 15:28:00 +0700</pubDate>
+                <guid >https://thanhnien.vn/robot-hut-bui-co-the-tiet-lo-nhung-gi-ve-cuoc-song-gia-dinh-185261020145839698.htm</guid>
+            </item>
+<item>
+                <title><![CDATA[Lỗ hổng từ dịch vụ sao lưu khiến h&agrave;ng loạt hệ thống Microsoft 365 bị x&acirc;m nhập]]></title>
+                <link>https://thanhnien.vn/lo-hong-tu-dich-vu-sao-luu-khien-hang-loat-he-thong-microsoft-365-bi-xam-nhap-18526101918405634.htm</link>
+                <description><![CDATA[<a href="https://thanhnien.vn/lo-hong-tu-dich-vu-sao-luu-khien-hang-loat-he-thong-microsoft-365-bi-xam-nhap-18526101918405634.htm"><img src="https://images2.thanhnien.vn/zoom/600_315/528068263637045248/2026/10/19/phong-dieu-khien-hacker-toan-cau-17924288533241271729271-0-54-941-1560-crop-1792428862136660566471.png"></a> Một cuộc tấn c&ocirc;ng chuỗi cung ứng li&ecirc;n quan đến dịch vụ sao lưu ConnectWise đ&atilde; khiến &iacute;t nhất 162 m&ocirc;i trường Microsoft 365 bị truy cập tr&aacute;i ph&eacute;p.]]></description>
+                <pubDate>Tue, 20 Oct 26 14:06:00 +0700</pubDate>
+                <guid >https://thanhnien.vn/lo-hong-tu-dich-vu-sao-luu-khien-hang-loat-he-thong-microsoft-365-bi-xam-nhap-18526101918405634.htm</guid>
+            </item>
+            </channel>
+</rss>
