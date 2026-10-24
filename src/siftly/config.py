@@ -34,3 +34,8 @@ class Settings(BaseSettings):
     # Chromium để chụp ảnh Bài gốc: địa chỉ WebSocket của một Playwright server, như dịch vụ
     # browser trong compose.yaml. Để trống thì tự mở Chromium cài bằng `playwright install`.
     browser_url: str | None = None
+    # Tài khoản duy nhất của trang quản lí. Chưa có mật khẩu thì `siftly admin` không chạy.
+    admin_username: str = "admin"
+    admin_password: str | None = None
+    # Thư mục chứa bản dựng của ứng dụng React (`npm run build` trong web/).
+    admin_web_dir: str = "web/dist"

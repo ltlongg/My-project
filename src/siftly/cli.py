@@ -1,5 +1,5 @@
-"""Dòng lệnh `siftly`: nạp dữ liệu khởi tạo, chạy Lịch, chạy một Kỳ ngay bây giờ, thử endpoint
-LLM."""
+"""Dòng lệnh `siftly`: nạp dữ liệu khởi tạo, chạy Lịch, chạy trang quản lí, chạy một Kỳ ngay bây
+giờ, thử endpoint LLM."""
 
 import argparse
 import io
@@ -9,14 +9,18 @@ import time
 from collections.abc import Iterator, Sequence
 from contextlib import closing, contextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 
 import httpx
+import uvicorn
 from langchain_openai import ChatOpenAI
 from playwright.sync_api import sync_playwright
 from pydantic import SecretStr
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from siftly.admin import create_app
+from siftly.admin.auth import Account
 from siftly.agents.editor import Editor
 from siftly.agents.verifier import Verifier
 from siftly.collectors.rss import RssCollector
@@ -55,6 +59,9 @@ log = logging.getLogger(__name__)
 
 # Lịch xét việc cần làm mỗi phút một lần.
 TICK_SECONDS = 60
+USER_AGENT = "Mozilla/5.0 (compatible; siftly/0.1)"
+# Trang quản lí mở ra Internet và chỉ có một mật khẩu chặn.
+MIN_ADMIN_PASSWORD_LENGTH = 12
 OUTCOME_LABELS = {
     RunOutcome.PUBLISHED: "Đã phát",
     RunOutcome.NOT_PUBLISHED: "Không phát",
@@ -80,6 +87,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "serve",
         help="Chạy Lịch: thu thập định kỳ, chạy Kỳ đúng giờ phát, thử lại và nhắn riêng khi hỏng",
     )
+    admin_command = commands.add_parser("admin", help="Chạy trang quản lí trên trình duyệt")
+    admin_command.add_argument("--host", default="127.0.0.1", help="Địa chỉ lắng nghe")
+    admin_command.add_argument("--port", type=int, default=8000, help="Cổng lắng nghe")
     run_command = commands.add_parser("run", help="Chạy một Kỳ cho một Chuyên mục ngay bây giờ")
     run_command.add_argument("section", nargs="?", default=TECH_SLUG, help="Mã Chuyên mục")
     run_command.add_argument(
@@ -120,6 +130,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not is_up_to_date(engine):
         print("Lược đồ chưa ở phiên bản mới nhất; chạy `siftly init` trước.", file=sys.stderr)
         return 2
+    if args.command == "admin":
+        return _admin(settings, session_factory, args)
     required = _missing(settings)
     if args.command == "serve" and not settings.telegram_owner_id:
         required.append("TELEGRAM_OWNER_ID")
@@ -176,6 +188,42 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 1 if record.outcome is RunOutcome.FAILED else 0
 
 
+def _admin(
+    settings: Settings, session_factory: sessionmaker[Session], args: argparse.Namespace
+) -> int:
+    password = settings.admin_password or ""
+    if len(password) < MIN_ADMIN_PASSWORD_LENGTH:
+        print(
+            f"ADMIN_PASSWORD cần dài ít nhất {MIN_ADMIN_PASSWORD_LENGTH} ký tự; điền vào .env rồi "
+            "chạy lại.",
+            file=sys.stderr,
+        )
+        return 2
+    web_dir = Path(settings.admin_web_dir)
+    if not (web_dir / "index.html").is_file():
+        print(
+            f"Chưa có bản dựng của ứng dụng ở {web_dir}; chạy `npm run build` trong web/ trước.",
+            file=sys.stderr,
+        )
+        return 2
+    # Dùng để bấm thử Nguồn và gửi tin nhắn thử tới Kênh đăng.
+    with httpx.Client(timeout=20, headers={"User-Agent": USER_AGENT}) as client:
+        app = create_app(
+            session_factory,
+            Account(settings.admin_username, password),
+            collectors={SourceKind.RSS: RssCollector(client)},
+            publishers=(
+                {ChannelKind.TELEGRAM: TelegramPublisher(client, settings.telegram_bot_token)}
+                if settings.telegram_bot_token
+                else {}
+            ),
+            web_dir=web_dir,
+        )
+        print(f"Trang quản lí ở http://{args.host}:{args.port}/; Ctrl+C để dừng.")
+        uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
 def _missing(settings: Settings) -> list[str]:
     """Tên các biến môi trường cần để chạy Kỳ mà còn để trống."""
     search_keys = {"tavily": settings.tavily_api_key, "brave": settings.brave_api_key}
@@ -205,9 +253,7 @@ def _open_runner(
     assert settings.telegram_bot_token
     assert shortlist_model and editor_model and verifier_model
     with (
-        httpx.Client(
-            timeout=20, headers={"User-Agent": "Mozilla/5.0 (compatible; siftly/0.1)"}
-        ) as client,
+        httpx.Client(timeout=20, headers={"User-Agent": USER_AGENT}) as client,
         # Model nhúng chạy trên CPU: một lô văn bản có thể mất vài chục giây.
         httpx.Client(timeout=httpx.Timeout(300, connect=10)) as embedding_client,
         open_checkpointer(engine) as checkpointer,

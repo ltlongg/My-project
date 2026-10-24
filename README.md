@@ -12,6 +12,9 @@ viết lại tối đa hai lần rồi bị bỏ), chụp ảnh **Bài gốc ch�
 vào **Kênh đăng** Telegram: một tin nhắn mở đầu nêu tên **Chuyên mục** và ngày, rồi mỗi **Tin** một
 tin nhắn ảnh. Còn dưới ba **Tin** qua **Kiểm chứng** thì **Bản tin** không được phát.
 
+Trang quản lí trên trình duyệt cho tạo, sửa, tạm dừng **Chuyên mục**, khai **Nguồn** và **Kênh
+đăng** rồi gắn vào **Chuyên mục**, mà không đụng tới code.
+
 ## Dựng môi trường
 
 Cần [Docker](https://docs.docker.com/get-docker/) và [uv](https://docs.astral.sh/uv/).
@@ -21,6 +24,7 @@ docker compose up -d --wait    # Postgres ở 127.0.0.1:54320, Chromium ở ws:/
 uv sync
 bash scripts/setup-keys.sh     # dẫn từng bước lấy khoá và tài khoản, ghi vào .env
 uv run siftly init           # tạo bảng, nạp Chuyên mục công nghệ, Nguồn RSS, Hướng dẫn, Kênh đăng
+(cd web && npm ci && npm run build)   # dựng ứng dụng React của trang quản lí, cần Node 22 trở lên
 ```
 
 `scripts/setup-keys.sh` chạy bằng Git Bash trên Windows và chạy lại được: giá trị đã có được giữ khi
@@ -86,6 +90,38 @@ lỡ giờ phát được chạy muộn. Quá giờ phát ba tiếng thì thôi:
 thử lại, và chỉ **Kỳ** gần nhất của mỗi **Chuyên mục** được xét, nên không chạy bù hàng loạt.
 Lệnh `siftly run` và Lịch không cùng chạy một **Chuyên mục** được: bên đến sau bị từ chối.
 
+## Trang quản lí
+
+```sh
+uv run siftly admin          # http://127.0.0.1:8000/, thêm --host, --port để đổi
+```
+
+Đăng nhập bằng tài khoản duy nhất: tên ở `ADMIN_USERNAME` (để trống là `admin`), mật khẩu ở
+`ADMIN_PASSWORD`, dài ít nhất 12 ký tự. Phiên đăng nhập kéo dài 30 ngày. Mọi đường dẫn dưới `/api`,
+trừ đăng nhập và đăng xuất, trả 401 khi chưa đăng nhập.
+
+Trên trang **Chuyên mục** tạo, sửa và tạm dừng được một **Chuyên mục**: tên, mô tả phạm vi, giờ phát
+và số **Tin** tối đa mỗi **Bản tin**. Lịch và `siftly run` đọc thiết lập ở mỗi **Kỳ**, nên thay đổi
+có hiệu lực từ **Kỳ** kế tiếp mà không cần khởi động lại `siftly serve`. Mô tả phạm vi được Sơ tuyển
+và **Biên tập** đọc cùng **Hướng dẫn** của **Biên tập**. **Chuyên mục** mới bắt đầu ở trạng thái tạm
+dừng, kèm một **Hướng dẫn** khởi đầu, vì chưa có **Nguồn** và **Kênh đăng** nào.
+
+Trên trang **Nguồn** và **Kênh đăng** thêm, sửa, tắt và bật lại được từng cái, và gắn nó vào một hay
+nhiều **Chuyên mục**. Trước khi lưu một **Nguồn**, bấm "Lấy thử" để thấy vài **Bài gốc** mới nhất nó
+trả về; không gì được lưu. Mỗi **Nguồn** hiện lần lấy gần nhất, số **Bài gốc** trong 7 ngày qua và lỗi
+gần nhất. "Gửi tin nhắn thử" gửi một tin chữ tới **Kênh đăng** bằng `TELEGRAM_BOT_TOKEN`; chưa có
+token thì trang báo máy chủ chưa có bộ phát. **Nguồn** đang tắt không được thu thập và không góp ứng
+viên cho **Kỳ**; **Kênh đăng** đang tắt không nhận **Bản tin**. Không có nút xoá: tắt là cách bỏ một
+**Nguồn** hay **Kênh đăng** ra.
+
+Khi sửa giao diện, chạy Vite cạnh `siftly admin`; Vite chuyển mọi lời gọi `/api` tới cổng 8000:
+
+```sh
+cd web && npm run dev        # http://127.0.0.1:5173/
+```
+
+Hệ giao diện (màu, chữ, khoảng cách, thành phần, mẫu trang) ở [docs/ui.md](docs/ui.md).
+
 ## Thử endpoint LLM
 
 ```sh
@@ -112,6 +148,7 @@ thật ở `BROWSER_URL` (hoặc Chromium đã cài khi để trống), với c�
 uv run mypy          # kiểm tra kiểu
 uv run ruff check    # lint
 uv run ruff format   # định dạng
+(cd web && npm run build && npm run lint)   # kiểu và lint của ứng dụng React
 ```
 
 ## Bố cục
@@ -131,8 +168,13 @@ uv run ruff format   # định dạng
 - `src/siftly/images/`: chụp ảnh **Bài gốc chính**: ảnh chụp trang bằng Playwright, rồi ảnh đại
   diện, rồi không ảnh.
 - `src/siftly/publishers/`: giao diện chung của bộ phát và bộ phát Telegram.
+- `src/siftly/admin/`: API trang quản lí (FastAPI): đăng nhập, **Chuyên mục**, **Nguồn**, **Kênh
+  đăng**; phục vụ cả bản dựng của `web/`. Các loại **Nguồn** và **Kênh đăng** mà trang hỏi được khai
+  ở `admin/kinds.py`.
+- `web/`: ứng dụng React của trang quản lí, dùng shadcn/ui.
 - `src/siftly/llm_probe.py`: bộ thử endpoint LLM.
 - `src/siftly/models.py`, `src/siftly/migrations/`: các bảng và migration (Alembic).
 - `tests/conftest.py`: khuôn test tại điểm "Chạy Kỳ" (**Nguồn** giả, **Kênh đăng** giả, LLM trả lời
-  theo kịch bản, bộ nhúng giả, bộ chụp ảnh giả, thông báo riêng giả, đồng hồ giả).
+  theo kịch bản, bộ nhúng giả, bộ chụp ảnh giả, thông báo riêng giả, đồng hồ giả) và tại điểm "API
+  trang quản lí" (`api` chưa đăng nhập, `admin` đã đăng nhập, gọi API thật).
 - `tests/fixtures/`: phản hồi mẫu cho test của từng bộ nối ra bên ngoài.

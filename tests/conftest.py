@@ -1,8 +1,11 @@
-"""Khuôn test tại điểm "Chạy Kỳ": Nguồn giả, Kênh đăng giả, LLM theo kịch bản, bộ nhúng giả,
-model chấm điểm giả, bộ chụp ảnh giả, thông báo riêng giả, đồng hồ giả, Postgres thật.
+"""Khuôn test tại hai điểm, cùng Postgres thật:
 
-Đồng hồ giả là tham số `run_at` của `Runner.run`, và `World.clock` của Lịch: test tự nói "bây giờ"
-là lúc nào.
+- "Chạy Kỳ": Nguồn giả, Kênh đăng giả, LLM theo kịch bản, bộ nhúng giả, model chấm điểm giả, bộ
+  chụp ảnh giả, thông báo riêng giả, đồng hồ giả.
+- "API trang quản lí": gọi API thật qua HTTP, chưa đăng nhập (`api`) hoặc đã đăng nhập (`admin`).
+
+Đồng hồ giả là tham số `run_at` của `Runner.run`, `World.clock` của Lịch, và `api_clock` của API:
+test tự nói "bây giờ" là lúc nào.
 """
 
 import json
@@ -16,6 +19,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
+from fastapi.testclient import TestClient
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -24,6 +28,8 @@ from pydantic import Field
 from sqlalchemy import Engine, create_engine, func, make_url, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
+from siftly.admin import create_app
+from siftly.admin.auth import Account
 from siftly.agents.editor import Editor
 from siftly.agents.verifier import Verifier
 from siftly.collectors import NewArticle
@@ -135,6 +141,8 @@ class FakePublisher:
     def __init__(self) -> None:
         # Mỗi lần phát có Tin tới nơi: địa chỉ, và Bản tin chỉ gồm những Tin đã tới ở lần ấy.
         self.received: list[tuple[str, BulletinContent]] = []
+        # Mỗi tin nhắn thử đã tới nơi: địa chỉ và nội dung.
+        self.tests_received: list[tuple[str, str]] = []
         self._errors: dict[str, tuple[BaseException, int]] = {}
 
     def fail(self, address: str, error: BaseException, after: int = 0) -> None:
@@ -164,6 +172,11 @@ class FakePublisher:
         finally:
             if delivered:
                 self.received.append((address, replace(bulletin, stories=tuple(delivered))))
+
+    def send_test(self, address: str, text: str) -> None:
+        if address in self._errors:
+            raise self._errors[address][0]
+        self.tests_received.append((address, text))
 
 
 class FakeExtractor:
@@ -682,6 +695,7 @@ class World:
                 publish_time=publish_time,
                 is_paused=paused,
             )
+            session.add(section)
             for url in sources:
                 existing = session.scalar(select(Source).where(Source.url == url))
                 section.sources.append(existing or Source(kind=SourceKind.RSS, name=url, url=url))
@@ -690,7 +704,6 @@ class World:
                 section.channels.append(
                     channel or Channel(kind=ChannelKind.TELEGRAM, name=address, address=address)
                 )
-            session.add(section)
         if guideline is not None:
             self.set_guideline(slug, guideline)
 
@@ -849,5 +862,59 @@ class World:
 
 
 @pytest.fixture
-def world(session_factory: sessionmaker[Session], checkpointer: PostgresSaver) -> World:
-    return World(session_factory, checkpointer)
+def collector() -> FakeCollector:
+    """Bộ thu thập giả chung của Chạy Kỳ và của API, nơi bấm thử Nguồn."""
+    return FakeCollector()
+
+
+@pytest.fixture
+def publisher() -> FakePublisher:
+    """Bộ phát giả chung của Chạy Kỳ và của API, nơi gửi tin nhắn thử tới Kênh đăng."""
+    return FakePublisher()
+
+
+@pytest.fixture
+def world(
+    session_factory: sessionmaker[Session],
+    checkpointer: PostgresSaver,
+    collector: FakeCollector,
+    publisher: FakePublisher,
+) -> World:
+    return World(session_factory, checkpointer, collector=collector, publisher=publisher)
+
+
+ADMIN = Account("chu-he-thong", "mat-khau-thu-nghiem")
+
+
+@pytest.fixture
+def api_clock() -> FakeClock:
+    """Đồng hồ giả của API, để tính hạn phiên đăng nhập."""
+    return FakeClock()
+
+
+@pytest.fixture
+def api(
+    session_factory: sessionmaker[Session],
+    api_clock: FakeClock,
+    collector: FakeCollector,
+    publisher: FakePublisher,
+) -> Iterator[TestClient]:
+    """API trang quản lí, chưa đăng nhập. Tài khoản duy nhất là `ADMIN`. Bấm thử Nguồn và gửi tin
+    nhắn thử đi qua cùng bộ thu thập và bộ phát giả với `world`."""
+    app = create_app(
+        session_factory,
+        ADMIN,
+        collectors={SourceKind.RSS: collector},
+        publishers={ChannelKind.TELEGRAM: publisher},
+        clock=api_clock,
+    )
+    with TestClient(app) as client:
+        yield client
+
+
+@pytest.fixture
+def admin(api: TestClient) -> TestClient:
+    """API trang quản lí, đã đăng nhập."""
+    response = api.post("/api/login", json={"username": ADMIN.username, "password": ADMIN.password})
+    assert response.status_code == 204, response.text
+    return api

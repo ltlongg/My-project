@@ -317,3 +317,25 @@ def test_publishing_again_skips_messages_already_sent_and_reports_each_one_sent(
     ] == ["<b>Bài B</b>", "<b>Bài C</b>"]
     # Chỉ Tin B tới nơi; Tin C bị từ chối.
     assert len(sent) == 1
+
+
+def test_test_message_is_plain_text_sent_to_the_chat() -> None:
+    telegram = FakeTelegram()
+
+    TelegramPublisher(telegram.client, TOKEN).send_test(CHAT_ID, "Tin nhắn thử <không phải HTML>")
+
+    assert telegram.calls == [
+        ("sendMessage", {"chat_id": CHAT_ID, "text": "Tin nhắn thử <không phải HTML>"})
+    ]
+
+
+def test_test_message_to_a_chat_the_bot_left_raises_error_with_reason() -> None:
+    telegram = FakeTelegram()
+    telegram.returns("sendMessage", 403, "telegram_bot_kicked.json")
+
+    with pytest.raises(TelegramPublishError) as error:
+        TelegramPublisher(telegram.client, TOKEN).send_test(CHAT_ID, "Tin nhắn thử")
+
+    assert (
+        str(error.value) == "Telegram từ chối: Forbidden: bot was kicked from the supergroup chat"
+    )

@@ -63,3 +63,8 @@ class Publisher(Protocol):
         lại phần nào.
         """
         ...
+
+    def send_test(self, address: str, text: str) -> None:
+        """Gửi một tin nhắn chữ thuần tới Kênh đăng ở `address`, để chủ hệ thống biết bot đã có
+        quyền đăng ở đó. Ném lỗi khi không gửi được."""
+        ...

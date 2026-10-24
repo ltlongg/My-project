@@ -72,6 +72,9 @@ class TelegramPublisher:
                 )
             on_sent()
 
+    def send_test(self, address: str, text: str) -> None:
+        call_bot(self._client, self._token, "sendMessage", json={"chat_id": address, "text": text})
+
 
 def call_bot(client: httpx.Client, token: str, method: str, **request: Any) -> None:
     """Gọi một phương thức của Bot API; ném TelegramPublishError khi Telegram không làm được."""

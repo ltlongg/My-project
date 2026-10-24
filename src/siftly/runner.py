@@ -161,7 +161,7 @@ class Runner:
                 return _record(run)
 
     def collect(self, now: datetime) -> None:
-        """Thu thập Bài gốc mới của mọi Nguồn thuộc một Chuyên mục chưa tạm dừng.
+        """Thu thập Bài gốc mới của mọi Nguồn đang bật thuộc một Chuyên mục chưa tạm dừng.
 
         Lỗi được ghi lại ở từng Nguồn, không lan ra ngoài.
         """
@@ -172,7 +172,7 @@ class Runner:
                 .where(Section.is_paused.is_(False))
             )
             sources = session.scalars(
-                select(Source).where(Source.id.in_(in_use)).order_by(Source.id)
+                select(Source).where(Source.id.in_(in_use), Source.is_enabled).order_by(Source.id)
             ).all()
             for source in sources:
                 self._collect(session, source, now - COLLECT_WINDOW, now)
@@ -221,8 +221,8 @@ class Runner:
         Mọi bước đều làm lại được trên cùng một Kỳ, để Kỳ bị gián đoạn chạy tiếp được.
         """
         section = run.section
-        if not section.sources:
-            return RunOutcome.FAILED, "Chuyên mục chưa có Nguồn nào"
+        if not section.enabled_sources:
+            return RunOutcome.FAILED, "Chuyên mục chưa có Nguồn nào đang bật"
         if run.editor_guideline is None:
             run.editor_guideline = session.scalar(
                 select(Guideline).where(
@@ -249,12 +249,12 @@ class Runner:
         collecting = run.bulletin is None and not run.candidates
         collected = [
             self._collect(session, source, since, run.run_at)
-            for source in (section.sources if collecting else ())
+            for source in (section.enabled_sources if collecting else ())
         ]
         session.commit()
         # Xét trước khi gọi Agent, để không tốn lời gọi LLM cho Bản tin không có nơi phát.
-        if not section.channels:
-            return RunOutcome.FAILED, "Chuyên mục chưa có Kênh đăng nào"
+        if not section.enabled_channels:
+            return RunOutcome.FAILED, "Chuyên mục chưa có Kênh đăng nào đang bật"
 
         if run.bulletin is None:
             # Ứng viên được lưu một lần; Kỳ chạy tiếp dùng lại đúng các ứng viên Biên tập đã thấy.
@@ -275,7 +275,10 @@ class Runner:
                 session.commit()
                 try:
                     ranked = self._shortlister.rank(
-                        run.editor_guideline.content, clusters, run.run_at, section.shortlist_size
+                        _scoped_guideline(section, run.editor_guideline),
+                        clusters,
+                        run.run_at,
+                        section.shortlist_size,
                     )
                 except ShortlistError as error:
                     return RunOutcome.FAILED, str(error)
@@ -298,7 +301,7 @@ class Runner:
             assignment = Assignment(
                 section=section.name,
                 run_at=run.run_at,
-                guideline=run.editor_guideline.content,
+                guideline=_scoped_guideline(section, run.editor_guideline),
                 verifier_guideline=run.verifier_guideline.content,
                 max_stories=section.max_stories,
                 candidates=[_for_editor(candidate, section) for candidate in run.shortlist],
@@ -411,8 +414,8 @@ class Runner:
             return article.full_text
 
     def _publish(self, session: Session, bulletin: Bulletin) -> list[str]:
-        """Phát tới từng Kênh đăng chưa nhận trọn Bản tin; trả về lỗi của những Kênh đăng không
-        phát được.
+        """Phát tới từng Kênh đăng đang bật chưa nhận trọn Bản tin; trả về lỗi của những Kênh đăng
+        không phát được.
 
         Kênh đăng đã nhận trọn thì bỏ qua, đã nhận một phần thì chỉ nhận phần còn lại, để không
         Kênh đăng nào nhận Bản tin hai lần, kể cả khi thử lại hay chạy tiếp sau khi bị gián đoạn.
@@ -420,7 +423,7 @@ class Runner:
         content = _content(bulletin)
         deliveries = {delivery.channel_id: delivery for delivery in bulletin.deliveries}
         errors = []
-        for channel in bulletin.run.section.channels:
+        for channel in bulletin.run.section.enabled_channels:
             delivery = deliveries.get(channel.id)
             if delivery is None:
                 delivery = Delivery(channel=channel, parts_sent=0, delivered=False)
@@ -576,11 +579,10 @@ def _save_articles(
 def _run_articles(
     session: Session, section: Section, since: datetime, run_at: datetime
 ) -> list[Article]:
-    """Bài gốc từ Nguồn của Chuyên mục xuất hiện trong khoảng (since, run_at], mới nhất trước."""
-    of_section = (
-        select(article_sources.c.article_id)
-        .join(section_sources, section_sources.c.source_id == article_sources.c.source_id)
-        .where(section_sources.c.section_id == section.id)
+    """Bài gốc từ Nguồn đang bật của Chuyên mục xuất hiện trong khoảng (since, run_at], mới nhất
+    trước."""
+    of_section = select(article_sources.c.article_id).where(
+        article_sources.c.source_id.in_(source.id for source in section.enabled_sources)
     )
     return list(
         session.scalars(
@@ -594,6 +596,13 @@ def _run_articles(
             .limit(MAX_ARTICLES)
         )
     )
+
+
+def _scoped_guideline(section: Section, guideline: Guideline) -> str:
+    """Hướng dẫn của Biên tập kèm mô tả phạm vi của Chuyên mục, như Sơ tuyển và Biên tập đọc."""
+    if not section.scope:
+        return guideline.content
+    return f"Phạm vi của Chuyên mục: {section.scope}\n\n{guideline.content}"
 
 
 def _for_editor(candidate: Candidate, section: Section) -> editor.Candidate:

@@ -92,6 +92,8 @@ class Section(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     slug: Mapped[str] = mapped_column(unique=True)
     name: Mapped[str]
+    # Mô tả phạm vi do chủ hệ thống viết: Sơ tuyển và Biên tập đọc nó cùng Hướng dẫn của Biên tập.
+    scope: Mapped[str] = mapped_column(default="", server_default="")
     max_stories: Mapped[int]
     # Số ứng viên Tin tối đa qua Sơ tuyển để tới Biên tập mỗi Kỳ.
     shortlist_size: Mapped[int] = mapped_column(default=30, server_default="30")
@@ -100,10 +102,23 @@ class Section(Base):
     # Chuyên mục đang tạm dừng thì Lịch không chạy Kỳ nào cho nó; thiết lập vẫn giữ nguyên.
     is_paused: Mapped[bool] = mapped_column(default=False, server_default=false())
 
-    sources: Mapped[list[Source]] = relationship(secondary=section_sources, order_by="Source.id")
-    channels: Mapped[list[Channel]] = relationship(
-        secondary=section_channels, order_by="Channel.id"
+    # Mọi Nguồn và Kênh đăng đã gắn, kể cả những cái đang tắt.
+    sources: Mapped[list[Source]] = relationship(
+        secondary=section_sources, order_by="Source.id", back_populates="sections"
     )
+    channels: Mapped[list[Channel]] = relationship(
+        secondary=section_channels, order_by="Channel.id", back_populates="sections"
+    )
+
+    @property
+    def enabled_sources(self) -> list[Source]:
+        """Các Nguồn Kỳ thu thập và lấy ứng viên từ đó."""
+        return [source for source in self.sources if source.is_enabled]
+
+    @property
+    def enabled_channels(self) -> list[Channel]:
+        """Các Kênh đăng nhận Bản tin của Chuyên mục."""
+        return [channel for channel in self.channels if channel.is_enabled]
 
 
 class Source(Base):
@@ -114,8 +129,15 @@ class Source(Base):
     kind: Mapped[SourceKind] = mapped_column(_enum_column(SourceKind))
     name: Mapped[str]
     url: Mapped[str]
+    # Nguồn đang tắt không được thu thập và không góp ứng viên cho Kỳ nào; thiết lập vẫn giữ nguyên.
+    is_enabled: Mapped[bool] = mapped_column(default=True, server_default=true())
+    # Lần thu thập gần nhất, thành công hay không, và lỗi của lần ấy; lấy được thì để trống.
     last_fetched_at: Mapped[datetime | None]
     last_error: Mapped[str | None]
+
+    sections: Mapped[list[Section]] = relationship(
+        secondary=section_sources, order_by="Section.id", back_populates="sources"
+    )
 
 
 class Channel(Base):
@@ -126,6 +148,12 @@ class Channel(Base):
     kind: Mapped[ChannelKind] = mapped_column(_enum_column(ChannelKind))
     name: Mapped[str]
     address: Mapped[str]
+    # Kênh đăng đang tắt không nhận Bản tin nào; thiết lập vẫn giữ nguyên.
+    is_enabled: Mapped[bool] = mapped_column(default=True, server_default=true())
+
+    sections: Mapped[list[Section]] = relationship(
+        secondary=section_channels, order_by="Section.id", back_populates="channels"
+    )
 
 
 class Article(Base):
@@ -338,3 +366,13 @@ class StoryImage(Base):
     data: Mapped[bytes | None] = mapped_column(LargeBinary)
     # Vì sao không dùng được cách tốt hơn, ví dụ vì sao không chụp được trang; mỗi lí do một dòng.
     fallback_reason: Mapped[str | None]
+
+
+class AdminSession(Base):
+    """Một phiên đăng nhập trang quản lí. Chỉ lưu dạng băm của mã phiên trong cookie."""
+
+    __tablename__ = "admin_sessions"
+
+    token_hash: Mapped[str] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime]
+    expires_at: Mapped[datetime]
