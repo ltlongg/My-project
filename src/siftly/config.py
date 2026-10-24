@@ -19,11 +19,11 @@ class Settings(BaseSettings):
     model: str | None = None
     editor_model: str | None = None
     verifier_model: str | None = None
-    # Dịch vụ tạo vector nhúng để gom Tin: một endpoint tương thích OpenAI, mặc định là Text
-    # Embeddings Inference trong compose.yaml. Endpoint LLM ở trên không tạo được vector nhúng.
-    embedding_base_url: str = "http://127.0.0.1:54321/v1"
+    # Dịch vụ tạo vector nhúng để gom Tin: một endpoint tương thích OpenAI, mặc định là Jina.
+    # Endpoint LLM ở trên không tạo được vector nhúng.
+    embedding_base_url: str = "https://api.jina.ai/v1"
     embedding_api_key: str | None = None
-    embedding_model: str = "BAAI/bge-m3"
+    embedding_model: str = "jina-embeddings-v5-text-small"
     # Công cụ tìm kiếm web của Biên tập.
     search_provider: Literal["tavily", "brave"] = "tavily"
     tavily_api_key: str | None = None

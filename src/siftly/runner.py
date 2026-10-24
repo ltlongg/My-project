@@ -9,14 +9,14 @@ from sqlalchemy import func, literal, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
-from bulletin import clustering
-from bulletin.agents import editor
-from bulletin.agents.editor import Assignment, Editor, EditorError
-from bulletin.agents.verifier import VerifierError
-from bulletin.collectors import Collector, NewArticle
-from bulletin.embeddings import Embedder
-from bulletin.extractors import Extractor
-from bulletin.models import (
+from siftly import clustering
+from siftly.agents import editor
+from siftly.agents.editor import Assignment, Editor, EditorError
+from siftly.agents.verifier import VerifierError
+from siftly.collectors import Collector, NewArticle
+from siftly.embeddings import Embedder
+from siftly.extractors import Extractor
+from siftly.models import (
     Article,
     Bulletin,
     Candidate,
@@ -34,8 +34,8 @@ from bulletin.models import (
     article_sources,
     section_sources,
 )
-from bulletin.publishers import BulletinContent, Publisher, StoryContent
-from bulletin.urls import normalize_url
+from siftly.publishers import BulletinContent, Publisher, StoryContent
+from siftly.urls import normalize_url
 
 log = logging.getLogger(__name__)
 

@@ -2,10 +2,10 @@
 
 import pytest
 
-from bulletin.collectors import NewArticle
-from bulletin.models import RunOutcome
-from bulletin.publishers import StoryContent
-from bulletin.search import SearchResult
+from siftly.collectors import NewArticle
+from siftly.models import RunOutcome
+from siftly.publishers import StoryContent
+from siftly.search import SearchResult
 from tests.conftest import DraftStory, World, at, read, say, search, submit
 
 RSS = "https://bao.example/rss"

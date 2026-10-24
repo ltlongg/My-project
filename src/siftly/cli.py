@@ -1,4 +1,4 @@
-"""Dòng lệnh `bulletin`: nạp dữ liệu khởi tạo, chạy một Kỳ ngay bây giờ, thử endpoint LLM."""
+"""Dòng lệnh `siftly`: nạp dữ liệu khởi tạo, chạy một Kỳ ngay bây giờ, thử endpoint LLM."""
 
 import argparse
 import io
@@ -11,14 +11,14 @@ import httpx
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
-from bulletin.agents.editor import Editor
-from bulletin.agents.verifier import Verifier
-from bulletin.collectors.rss import RssCollector
-from bulletin.config import Settings
-from bulletin.db import make_engine, make_session_factory, open_checkpointer, upgrade
-from bulletin.embeddings.endpoint import EndpointEmbedder
-from bulletin.extractors.article import ArticleExtractor
-from bulletin.llm_probe import (
+from siftly.agents.editor import Editor
+from siftly.agents.verifier import Verifier
+from siftly.collectors.rss import RssCollector
+from siftly.config import Settings
+from siftly.db import make_engine, make_session_factory, open_checkpointer, upgrade
+from siftly.embeddings.endpoint import EndpointEmbedder
+from siftly.extractors.article import ArticleExtractor
+from siftly.llm_probe import (
     EndpointError,
     LLMEndpoint,
     burst,
@@ -26,13 +26,13 @@ from bulletin.llm_probe import (
     probe_models,
     report,
 )
-from bulletin.models import ChannelKind, RunOutcome, SourceKind
-from bulletin.publishers.telegram import TelegramPublisher
-from bulletin.runner import Runner
-from bulletin.search import Searcher
-from bulletin.search.brave import BraveSearch
-from bulletin.search.tavily import TavilySearch
-from bulletin.seed import TECH_SLUG, seed
+from siftly.models import ChannelKind, RunOutcome, SourceKind
+from siftly.publishers.telegram import TelegramPublisher
+from siftly.runner import Runner
+from siftly.search import Searcher
+from siftly.search.brave import BraveSearch
+from siftly.search.tavily import TavilySearch
+from siftly.seed import TECH_SLUG, seed
 
 OUTCOME_LABELS = {
     RunOutcome.PUBLISHED: "Đã phát",
@@ -52,7 +52,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # httpx ghi lại địa chỉ từng lời gọi, mà địa chỉ của Telegram có chứa token của bot.
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
-    parser = argparse.ArgumentParser(prog="bulletin", description=__doc__)
+    parser = argparse.ArgumentParser(prog="siftly", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init", help="Nâng cấp lược đồ và nạp dữ liệu khởi tạo")
     run_command = commands.add_parser("run", help="Chạy một Kỳ cho một Chuyên mục ngay bây giờ")
@@ -114,7 +114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     assert editor_model and verifier_model
     with (
         httpx.Client(
-            timeout=20, headers={"User-Agent": "Mozilla/5.0 (compatible; bulletin/0.1)"}
+            timeout=20, headers={"User-Agent": "Mozilla/5.0 (compatible; siftly/0.1)"}
         ) as client,
         # Model nhúng chạy trên CPU: một lô văn bản có thể mất vài chục giây.
         httpx.Client(timeout=httpx.Timeout(300, connect=10)) as embedding_client,
@@ -151,7 +151,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 record = runner.run(args.section, datetime.now(UTC))
         except LookupError as error:
-            print(f"{error}. Đã chạy `bulletin init` chưa?", file=sys.stderr)
+            print(f"{error}. Đã chạy `siftly init` chưa?", file=sys.stderr)
             return 2
 
     if record is None:

@@ -25,11 +25,11 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from bulletin.agents import truncate_full_text
-from bulletin.agents.verifier import Verifier
-from bulletin.publishers import MAX_STORY_LENGTH, StoryContent
-from bulletin.search import Searcher
-from bulletin.vietnamese import is_vietnamese
+from siftly.agents import truncate_full_text
+from siftly.agents.verifier import Verifier
+from siftly.publishers import MAX_STORY_LENGTH, StoryContent
+from siftly.search import Searcher
+from siftly.vietnamese import is_vietnamese
 
 log = logging.getLogger(__name__)
 

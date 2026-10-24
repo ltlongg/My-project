@@ -23,17 +23,17 @@ from pydantic import Field
 from sqlalchemy import Engine, create_engine, func, make_url, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
-from bulletin.agents.editor import Editor
-from bulletin.agents.verifier import Verifier
-from bulletin.collectors import NewArticle
-from bulletin.db import (
+from siftly.agents.editor import Editor
+from siftly.agents.verifier import Verifier
+from siftly.collectors import NewArticle
+from siftly.db import (
     CHECKPOINT_TABLES,
     make_engine,
     make_session_factory,
     open_checkpointer,
     upgrade,
 )
-from bulletin.models import (
+from siftly.models import (
     Article,
     Base,
     Candidate,
@@ -47,10 +47,10 @@ from bulletin.models import (
     Story,
     Verification,
 )
-from bulletin.publishers import BulletinContent
-from bulletin.runner import Runner
-from bulletin.search import SearchResult
-from bulletin.urls import normalize_url
+from siftly.publishers import BulletinContent
+from siftly.runner import Runner
+from siftly.search import SearchResult
+from siftly.urls import normalize_url
 
 DEFAULT_URL = "postgresql+psycopg://bulletin:bulletin@127.0.0.1:54320/bulletin_test"
 VIETNAM_TZ = ZoneInfo("Asia/Ho_Chi_Minh")

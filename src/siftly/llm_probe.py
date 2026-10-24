@@ -1,6 +1,6 @@
 """Bộ thử endpoint LLM: từng model làm được gì, trước khi vòng agent dựa vào nó.
 
-Gọi endpoint thật qua `bulletin probe-llm`; mỗi model tốn khoảng mười lời gọi ngắn.
+Gọi endpoint thật qua `siftly probe-llm`; mỗi model tốn khoảng mười lời gọi ngắn.
 """
 
 import json
@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from bulletin.vietnamese import is_vietnamese
+from siftly.vietnamese import is_vietnamese
 
 # Tên và nhãn các phép thử trên từng model, theo thứ tự chạy và thứ tự cột trong báo cáo.
 CHECKS = {

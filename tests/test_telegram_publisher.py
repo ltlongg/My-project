@@ -6,8 +6,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from bulletin.publishers import BulletinContent, StoryContent
-from bulletin.publishers.telegram import TelegramPublisher, TelegramPublishError
+from siftly.publishers import BulletinContent, StoryContent
+from siftly.publishers.telegram import TelegramPublisher, TelegramPublishError
 from tests.conftest import at
 
 FIXTURES = Path(__file__).parent / "fixtures"

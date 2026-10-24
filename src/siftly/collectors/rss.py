@@ -9,7 +9,7 @@ from time import struct_time
 import feedparser
 import httpx
 
-from bulletin.collectors import NewArticle
+from siftly.collectors import NewArticle
 
 # Mô tả dài hơn thì cắt; phần đầu là đủ để biết bài nói về chuyện gì.
 MAX_DESCRIPTION = 500

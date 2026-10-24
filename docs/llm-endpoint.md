@@ -1,6 +1,6 @@
 # Endpoint LLM: làm được gì và dùng model nào
 
-Kết quả của `uv run bulletin probe-llm` ngày 2026-10-08 (ticket 02). Chạy lại lệnh mỗi khi đổi model hoặc đổi endpoint, rồi cập nhật ghi chú này.
+Kết quả của `uv run siftly probe-llm` ngày 2026-10-08 (ticket 02). Chạy lại lệnh mỗi khi đổi model hoặc đổi endpoint, rồi cập nhật ghi chú này.
 
 Endpoint là một proxy chạy trên máy phát triển (`http://localhost:20128/v1`), đứng trước hai nhà cung cấp: `cx/` là Codex qua một tài khoản ChatGPT, `ds/` là DeepSeek.
 

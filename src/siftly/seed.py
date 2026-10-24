@@ -3,7 +3,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from bulletin.models import (
+from siftly.models import (
     Channel,
     ChannelKind,
     Guideline,

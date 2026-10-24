@@ -5,7 +5,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from bulletin.extractors.article import ArticleExtractor, ExtractError
+from siftly.extractors.article import ArticleExtractor, ExtractError
 
 FIXTURES = Path(__file__).parent / "fixtures"
 ARTICLE_URL = "https://vnexpress.net/honor-600s-5g-dien-thoai-sieu-ben-pin-8-100-mah-5130044.html"

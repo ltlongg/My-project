@@ -4,9 +4,9 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from bulletin.collectors import NewArticle
-from bulletin.models import RunOutcome
-from bulletin.publishers import BulletinContent, StoryContent
+from siftly.collectors import NewArticle
+from siftly.models import RunOutcome
+from siftly.publishers import BulletinContent, StoryContent
 from tests.conftest import DraftStory, World, at, read, submit
 
 RSS = "https://bao.example/rss"

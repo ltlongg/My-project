@@ -1,5 +1,5 @@
 [project]
-name = "bulletin"
+name = "siftly"
 version = "0.1.0"
 description = "Bản tin tự động: thu thập, chọn lọc, tóm tắt và phát bản tin định kỳ"
 readme = "README.md"
@@ -21,7 +21,7 @@ dependencies = [
 ]
 
 [project.scripts]
-bulletin = "bulletin.cli:main"
+siftly = "siftly.cli:main"
 
 [dependency-groups]
 dev = [
@@ -35,7 +35,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/bulletin"]
+packages = ["src/siftly"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

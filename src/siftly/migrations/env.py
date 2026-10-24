@@ -1,14 +1,14 @@
 from alembic import context
 from sqlalchemy import create_engine
 
-from bulletin.config import Settings
-from bulletin.models import Base
+from siftly.config import Settings
+from siftly.models import Base
 
 target_metadata = Base.metadata
 
 
 def run_migrations_online() -> None:
-    # bulletin.db.upgrade truyền sẵn kết nối; lệnh alembic gọi trực tiếp thì đọc DATABASE_URL.
+    # siftly.db.upgrade truyền sẵn kết nối; lệnh alembic gọi trực tiếp thì đọc DATABASE_URL.
     connection = context.config.attributes.get("connection")
     if connection is not None:
         context.configure(connection=connection, target_metadata=target_metadata)

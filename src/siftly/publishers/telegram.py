@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from bulletin.publishers import BulletinContent, text_length
+from siftly.publishers import BulletinContent, text_length
 
 VIETNAM_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 # Giới hạn của Telegram cho một tin nhắn chữ.

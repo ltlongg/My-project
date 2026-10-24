@@ -3,8 +3,8 @@
 import pytest
 from langchain_core.messages import AIMessage
 
-from bulletin.collectors import NewArticle
-from bulletin.models import RunOutcome
+from siftly.collectors import NewArticle
+from siftly.models import RunOutcome
 from tests.conftest import (
     DEFAULT_VERIFIER_GUIDELINE,
     DraftStory,

@@ -14,8 +14,8 @@ from datetime import datetime, timedelta
 from sqlalchemy import Float, select
 from sqlalchemy.orm import Session, aliased
 
-from bulletin.embeddings import Embedder
-from bulletin.models import Article, Bulletin, Run, RunOutcome, Story, candidate_articles
+from siftly.embeddings import Embedder
+from siftly.models import Article, Bulletin, Run, RunOutcome, Story, candidate_articles
 
 log = logging.getLogger(__name__)
 

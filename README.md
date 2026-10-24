@@ -15,14 +15,11 @@ viết lại tối đa hai lần rồi bị bỏ), rồi gửi **Bản tin** và
 Cần [Docker](https://docs.docker.com/get-docker/) và [uv](https://docs.astral.sh/uv/).
 
 ```sh
-docker compose up -d --wait    # Postgres ở 127.0.0.1:54320, model nhúng ở 127.0.0.1:54321
+docker compose up -d --wait    # Postgres ở 127.0.0.1:54320
 uv sync
 bash scripts/setup-keys.sh     # dẫn từng bước lấy khoá và tài khoản, ghi vào .env
-uv run bulletin init           # tạo bảng, nạp Chuyên mục công nghệ, Nguồn RSS, Hướng dẫn, Kênh đăng
+uv run siftly init           # tạo bảng, nạp Chuyên mục công nghệ, Nguồn RSS, Hướng dẫn, Kênh đăng
 ```
-
-Lần đầu, dịch vụ `embeddings` tải khoảng 2,3 GB model `BAAI/bge-m3`; khi chạy nó cần khoảng 3,2 GB RAM
-trong Docker (xem [docs/clustering.md](docs/clustering.md)).
 
 `scripts/setup-keys.sh` chạy bằng Git Bash trên Windows và chạy lại được: giá trị đã có được giữ khi
 nhấn Enter. Muốn điền tay thì sao chép `.env.example` thành `.env`.
@@ -30,7 +27,7 @@ nhấn Enter. Muốn điền tay thì sao chép `.env.example` thành `.env`.
 ## Chạy một Kỳ
 
 ```sh
-uv run bulletin run tech
+uv run siftly run tech
 ```
 
 Lệnh in ra kết quả của **Kỳ** (đã phát, không phát hoặc hỏng kèm lí do) và các **Tin** trong
@@ -40,21 +37,21 @@ Lệnh in ra kết quả của **Kỳ** (đã phát, không phát hoặc hỏng 
 `EDITOR_MODEL` và `VERIFIER_MODEL`, để trống thì dùng `MODEL`. Nên đặt hai model của hai nhà
 cung cấp khác nhau (xem [docs/llm-endpoint.md](docs/llm-endpoint.md)). Công cụ tìm kiếm web của
 **Biên tập** là Tavily; đặt `SEARCH_PROVIDER=brave` để đổi sang Brave. Vector nhúng để gom **Tin**
-lấy từ dịch vụ `embeddings` trong `compose.yaml`, vì endpoint LLM không tạo được vector nhúng; đổi bằng
-`EMBEDDING_BASE_URL` và `EMBEDDING_MODEL`.
+lấy từ một endpoint `/embeddings` tương thích OpenAI (hiện dùng Jina), vì endpoint LLM không tạo được vector
+nhúng; cấu hình bằng `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY` và `EMBEDDING_MODEL`.
 
 Trạng thái của **Biên tập** và các kết luận của **Kiểm chứng** được lưu sau từng bước. **Kỳ** bị dừng giữa chừng (mất điện, tắt tiến
 trình) thì chạy tiếp từ bước đang dở, không đọc lại những **Bài gốc** đã đọc:
 
 ```sh
-uv run bulletin run tech --resume
+uv run siftly run tech --resume
 ```
 
 ## Thử endpoint LLM
 
 ```sh
-uv run bulletin probe-llm                      # mọi model của endpoint, mất chừng mười phút
-uv run bulletin probe-llm cx/gpt-5.5 ds/deepseek-chat
+uv run siftly probe-llm                      # mọi model của endpoint, mất chừng mười phút
+uv run siftly probe-llm cx/gpt-5.5 ds/deepseek-chat
 ```
 
 Lệnh gọi endpoint thật và in một báo cáo markdown: từng model có gọi thường, gọi công cụ, trả kết quả
@@ -78,18 +75,18 @@ uv run ruff format   # định dạng
 
 ## Bố cục
 
-- `src/bulletin/runner.py`: lối vào duy nhất "chạy một **Kỳ** cho **Chuyên mục** này tại thời điểm này".
-- `src/bulletin/collectors/`: giao diện chung của bộ thu thập và bộ thu thập RSS.
-- `src/bulletin/clustering.py`: gom **Bài gốc** cùng sự kiện thành ứng viên **Tin**, đối chiếu với
+- `src/siftly/runner.py`: lối vào duy nhất "chạy một **Kỳ** cho **Chuyên mục** này tại thời điểm này".
+- `src/siftly/collectors/`: giao diện chung của bộ thu thập và bộ thu thập RSS.
+- `src/siftly/clustering.py`: gom **Bài gốc** cùng sự kiện thành ứng viên **Tin**, đối chiếu với
   **Tin** đã phát.
-- `src/bulletin/embeddings/`: giao diện chung của bộ nhúng và bộ nhúng qua endpoint `/embeddings`.
-- `src/bulletin/extractors/`: giao diện chung của bộ lấy nội dung và bộ trích thân bài báo.
-- `src/bulletin/agents/`: vòng agent viết bằng LangGraph: **Biên tập**, và **Kiểm chứng** xét
+- `src/siftly/embeddings/`: giao diện chung của bộ nhúng và bộ nhúng qua endpoint `/embeddings`.
+- `src/siftly/extractors/`: giao diện chung của bộ lấy nội dung và bộ trích thân bài báo.
+- `src/siftly/agents/`: vòng agent viết bằng LangGraph: **Biên tập**, và **Kiểm chứng** xét
   từng **Tin** nó nộp.
-- `src/bulletin/search/`: giao diện chung của bộ tìm kiếm web, với Tavily và Brave.
-- `src/bulletin/publishers/`: giao diện chung của bộ phát và bộ phát Telegram.
-- `src/bulletin/llm_probe.py`: bộ thử endpoint LLM.
-- `src/bulletin/models.py`, `src/bulletin/migrations/`: các bảng và migration (Alembic).
+- `src/siftly/search/`: giao diện chung của bộ tìm kiếm web, với Tavily và Brave.
+- `src/siftly/publishers/`: giao diện chung của bộ phát và bộ phát Telegram.
+- `src/siftly/llm_probe.py`: bộ thử endpoint LLM.
+- `src/siftly/models.py`, `src/siftly/migrations/`: các bảng và migration (Alembic).
 - `tests/conftest.py`: khuôn test tại điểm "Chạy Kỳ" (**Nguồn** giả, **Kênh đăng** giả, LLM trả lời
   theo kịch bản, bộ nhúng giả, đồng hồ giả).
 - `tests/fixtures/`: phản hồi mẫu cho test của từng bộ nối ra bên ngoài.

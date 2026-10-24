@@ -7,9 +7,9 @@ from pathlib import Path
 import httpx
 import pytest
 
-from bulletin.search import Searcher, SearchError
-from bulletin.search.brave import BraveSearch
-from bulletin.search.tavily import TavilySearch
+from siftly.search import Searcher, SearchError
+from siftly.search.brave import BraveSearch
+from siftly.search.tavily import TavilySearch
 
 FIXTURES = Path(__file__).parent / "fixtures"
 API_KEY = "secret-key"

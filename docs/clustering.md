@@ -4,7 +4,7 @@ Ghi chú của ticket 06, đo ngày 2026-10-20. Đọc trước khi đổi ngư�
 
 ## Cách làm
 
-**Gom Tin** là bước cố định (ADR 0001), chạy sau thu thập và trước **Biên tập**, ở `src/bulletin/clustering.py`.
+**Gom Tin** là bước cố định (ADR 0001), chạy sau thu thập và trước **Biên tập**, ở `src/siftly/clustering.py`.
 
 1. Mỗi **Bài gốc** được nhúng một lần bằng `BAAI/bge-m3`, từ tiêu đề cộng mô tả RSS. Vector được lưu ở `articles.embedding` (pgvector), kèm tên model. Đổi model thì các **Bài gốc** cần dùng được nhúng lại.
 2. Postgres tìm các cặp **Bài gốc** của **Kỳ** có độ giống (cosine) từ `SAME_EVENT_THRESHOLD` = 0,78 trở lên.

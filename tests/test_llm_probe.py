@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 import pytest
 
-from bulletin.llm_probe import LLMEndpoint, probe_embedding, probe_model, probe_models
+from siftly.llm_probe import LLMEndpoint, probe_embedding, probe_model, probe_models
 
 BASE_URL = "http://llm.example/v1"
 API_KEY = "sk-test"

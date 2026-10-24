@@ -5,7 +5,7 @@ from collections.abc import Sequence
 
 import httpx
 
-from bulletin.embeddings import EmbeddingError
+from siftly.embeddings import EmbeddingError
 
 # Text Embeddings Inference mặc định nhận tối đa ngần này văn bản mỗi lời gọi.
 BATCH_SIZE = 32

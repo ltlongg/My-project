@@ -4,7 +4,7 @@ from collections.abc import Sequence
 
 import httpx
 
-from bulletin.search import RESULT_COUNT, SearchError, SearchResult
+from siftly.search import RESULT_COUNT, SearchError, SearchResult
 
 
 class TavilySearch:

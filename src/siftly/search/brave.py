@@ -6,7 +6,7 @@ from html import unescape
 
 import httpx
 
-from bulletin.search import RESULT_COUNT, SearchError, SearchResult
+from siftly.search import RESULT_COUNT, SearchError, SearchResult
 
 # Brave đánh dấu từ khớp trong trích đoạn bằng thẻ HTML.
 HTML_TAG = re.compile(r"<[^>]+>")

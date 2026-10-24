@@ -13,7 +13,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, ToolMessage
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
-from bulletin.agents import truncate_full_text
+from siftly.agents import truncate_full_text
 
 log = logging.getLogger(__name__)
 

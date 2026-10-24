@@ -398,5 +398,5 @@ else warn "Langfuse trả về mã $code. Thường là sai vùng (EU/US) hoặc
 pause
 
 finish
-say "Tiếp theo: uv run bulletin init, rồi uv run bulletin run tech"
+say "Tiếp theo: uv run siftly init, rồi uv run siftly run tech"
 printf '\n'

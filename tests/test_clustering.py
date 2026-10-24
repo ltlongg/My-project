@@ -4,10 +4,10 @@ from datetime import datetime
 
 import pytest
 
-from bulletin.collectors import NewArticle
-from bulletin.embeddings import EmbeddingError
-from bulletin.models import RunOutcome
-from bulletin.publishers import StoryContent
+from siftly.collectors import NewArticle
+from siftly.embeddings import EmbeddingError
+from siftly.models import RunOutcome
+from siftly.publishers import StoryContent
 from tests.conftest import DraftStory, World, at, read, rewrite, submit, unit_vector
 
 RSS = "https://bao.example/rss"

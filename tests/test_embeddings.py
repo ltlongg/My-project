@@ -7,8 +7,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from bulletin.embeddings import EmbeddingError
-from bulletin.embeddings.endpoint import BATCH_SIZE, EndpointEmbedder
+from siftly.embeddings import EmbeddingError
+from siftly.embeddings.endpoint import BATCH_SIZE, EndpointEmbedder
 
 FIXTURES = Path(__file__).parent / "fixtures"
 BASE_URL = "http://127.0.0.1:54321/v1"

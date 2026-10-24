@@ -6,8 +6,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from bulletin.collectors import NewArticle
-from bulletin.collectors.rss import MAX_DESCRIPTION, RssCollectError, RssCollector
+from siftly.collectors import NewArticle
+from siftly.collectors.rss import MAX_DESCRIPTION, RssCollectError, RssCollector
 from tests.conftest import at
 
 FIXTURES = Path(__file__).parent / "fixtures"
