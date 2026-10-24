@@ -6,7 +6,18 @@ from datetime import datetime
 from enum import StrEnum
 
 from pgvector.sqlalchemy import VECTOR
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, Index, Table, UniqueConstraint, func
+from sqlalchemy import (
+    Column,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Table,
+    UniqueConstraint,
+    func,
+    true,
+)
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -78,6 +89,8 @@ class Section(Base):
     slug: Mapped[str] = mapped_column(unique=True)
     name: Mapped[str]
     max_stories: Mapped[int]
+    # Số ứng viên Tin tối đa qua Sơ tuyển để tới Biên tập mỗi Kỳ.
+    shortlist_size: Mapped[int] = mapped_column(default=30, server_default="30")
 
     sources: Mapped[list[Source]] = relationship(secondary=section_sources, order_by="Source.id")
     channels: Mapped[list[Channel]] = relationship(
@@ -171,9 +184,14 @@ class Run(Base):
     verifier_guideline: Mapped[Guideline | None] = relationship(
         foreign_keys=[verifier_guideline_id]
     )
-    # Các ứng viên Tin sau Gom Tin; Biên tập chọn Tin trong số này.
+    # Mọi ứng viên Tin sau Gom Tin, điểm Sơ tuyển cao nhất trước, kể cả ứng viên bị loại.
     candidates: Mapped[list[Candidate]] = relationship(order_by="Candidate.position")
     bulletin: Mapped[Bulletin | None] = relationship(back_populates="run")
+
+    @property
+    def shortlist(self) -> list[Candidate]:
+        """Các ứng viên qua Sơ tuyển, theo thứ tự: Biên tập chọn Tin trong số này."""
+        return [candidate for candidate in self.candidates if candidate.shortlisted]
 
 
 class Bulletin(Base):
@@ -197,11 +215,17 @@ class Candidate(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     run_id: Mapped[int] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"))
-    # Thứ tự Biên tập thấy các ứng viên, từ 1.
+    # Thứ hạng theo điểm Sơ tuyển, từ 1; Biên tập thấy các ứng viên qua Sơ tuyển theo thứ tự này.
     position: Mapped[int]
     # Tin đã phát của cùng Chuyên mục mà ứng viên này giống; có thì ứng viên chỉ được phát như một
     # Tin "Cập nhật" của Tin đó.
     published_story_id: Mapped[int | None] = mapped_column(ForeignKey("stories.id"))
+    # Điểm Sơ tuyển, và các điểm thành phần từ 0 tới 1 theo tên tín hiệu; ứng viên có từ trước khi
+    # có Sơ tuyển thì để trống.
+    score: Mapped[float | None]
+    score_components: Mapped[dict[str, float] | None] = mapped_column(JSONB)
+    # Có qua Sơ tuyển để tới Biên tập hay không.
+    shortlisted: Mapped[bool] = mapped_column(server_default=true())
 
     articles: Mapped[list[Article]] = relationship(
         secondary=candidate_articles, order_by=[Article.appeared_at, Article.id]

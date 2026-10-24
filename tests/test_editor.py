@@ -296,9 +296,10 @@ def test_section_without_editor_guideline_fails_run_with_reason(world: World) ->
     assert world.llm.received == []
 
 
-def test_editor_only_receives_30_newest_candidates(world: World) -> None:
+def test_editor_receives_at_most_30_candidates_by_default(world: World) -> None:
     one_section(world, *(f"https://bao.example/{n}" for n in range(35)))
-    # Hai Bài gốc mới nhất là một sự kiện, nên 30 ứng viên gồm 31 Bài gốc.
+    # Mọi ứng viên cùng mức phù hợp nên 30 ứng viên mới nhất qua Sơ tuyển. Hai Bài gốc mới nhất là
+    # một sự kiện, nên 30 ứng viên gồm 31 Bài gốc.
     world.embedder.same_event("Original headline 0", "Original headline 1")
     world.llm.will(read("https://bao.example/0"), submit(DraftStory("https://bao.example/0")))
 

@@ -33,6 +33,7 @@ from siftly.search import Searcher
 from siftly.search.brave import BraveSearch
 from siftly.search.tavily import TavilySearch
 from siftly.seed import TECH_SLUG, seed
+from siftly.shortlisting import Shortlister
 
 OUTCOME_LABELS = {
     RunOutcome.PUBLISHED: "Đã phát",
@@ -93,6 +94,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     search_keys = {"tavily": settings.tavily_api_key, "brave": settings.brave_api_key}
+    shortlist_model = settings.shortlist_model or settings.model
     editor_model = settings.editor_model or settings.model
     verifier_model = settings.verifier_model or settings.model
     missing = [
@@ -101,6 +103,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "TELEGRAM_BOT_TOKEN": settings.telegram_bot_token,
             "OPENAI_BASE_URL": settings.openai_base_url,
             "OPENAI_API_KEY": settings.openai_api_key,
+            "SHORTLIST_MODEL hoặc MODEL": shortlist_model,
             "EDITOR_MODEL hoặc MODEL": editor_model,
             "VERIFIER_MODEL hoặc MODEL": verifier_model,
             f"{settings.search_provider.upper()}_API_KEY": search_keys[settings.search_provider],
@@ -111,7 +114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Thiếu {', '.join(missing)}; điền vào .env rồi chạy lại.", file=sys.stderr)
         return 2
     assert settings.telegram_bot_token and settings.openai_api_key
-    assert editor_model and verifier_model
+    assert shortlist_model and editor_model and verifier_model
     with (
         httpx.Client(
             timeout=20, headers={"User-Agent": "Mozilla/5.0 (compatible; siftly/0.1)"}
@@ -138,6 +141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 settings.embedding_model,
                 settings.embedding_api_key,
             ),
+            shortlister=Shortlister(_llm(settings, shortlist_model)),
             editor=Editor(
                 _llm(settings, editor_model),
                 Verifier(_llm(settings, verifier_model)),

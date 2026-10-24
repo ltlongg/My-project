@@ -35,7 +35,7 @@ Bộ thử chỉ cho biết model **làm được gì**, không so được mode
 | **Kiểm chứng** | `ds/deepseek-v4-pro` | Khác nhà cung cấp với **Biên tập**, để người soát không mắc cùng lỗi với người viết |
 | Cải tiến | `cx/gpt-5.6-luna` | Chưa có căn cứ để chọn khác **Biên tập** |
 
-Mỗi vai trò có một biến riêng, trống thì dùng `MODEL`. Ticket 04 đã thêm `EDITOR_MODEL`, ticket 05 thêm `VERIFIER_MODEL`; `SHORTLIST_MODEL` và `IMPROVER_MODEL` được thêm khi vai trò đó có code.
+Mỗi vai trò có một biến riêng, trống thì dùng `MODEL`. Ticket 04 đã thêm `EDITOR_MODEL`, ticket 05 thêm `VERIFIER_MODEL`, ticket 07 thêm `SHORTLIST_MODEL`; `IMPROVER_MODEL` được thêm khi vai trò đó có code.
 
 ## Điều code phải tính tới
 

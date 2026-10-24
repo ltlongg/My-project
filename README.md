@@ -40,6 +40,10 @@ cung cấp khác nhau (xem [docs/llm-endpoint.md](docs/llm-endpoint.md)). Công 
 lấy từ một endpoint `/embeddings` tương thích OpenAI (hiện dùng Jina), vì endpoint LLM không tạo được vector
 nhúng; cấu hình bằng `EMBEDDING_BASE_URL`, `EMBEDDING_API_KEY` và `EMBEDDING_MODEL`.
 
+Trước **Biên tập**, bước sơ tuyển chấm điểm mọi ứng viên **Tin** và chỉ chuyển tối đa 30 ứng viên
+điểm cao nhất (cột `sections.shortlist_size`). Mức phù hợp với phạm vi **Chuyên mục** do một model
+nhỏ chấm, cấu hình bằng `SHORTLIST_MODEL`, để trống thì dùng `MODEL`.
+
 Trạng thái của **Biên tập** và các kết luận của **Kiểm chứng** được lưu sau từng bước. **Kỳ** bị dừng giữa chừng (mất điện, tắt tiến
 trình) thì chạy tiếp từ bước đang dở, không đọc lại những **Bài gốc** đã đọc:
 

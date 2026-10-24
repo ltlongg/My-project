@@ -35,6 +35,7 @@ from siftly.models import (
     section_sources,
 )
 from siftly.publishers import BulletinContent, Publisher, StoryContent
+from siftly.shortlisting import Shortlister, ShortlistError
 from siftly.urls import normalize_url
 
 log = logging.getLogger(__name__)
@@ -44,8 +45,6 @@ FIRST_RUN_WINDOW = timedelta(hours=24)
 # Số Bài gốc mới nhất của Kỳ được đưa vào Gom Tin; chặn trên để một Nguồn bất thường không làm
 # Kỳ chậm đi nhiều.
 MAX_ARTICLES = 500
-# Số ứng viên Tin mới nhất đưa cho Biên tập, cho tới khi có bước sơ tuyển (ticket 07).
-MAX_CANDIDATES = 30
 # Bản tin có ít Tin qua Kiểm chứng hơn số này thì không phát, coi như Kỳ hỏng.
 MIN_STORIES = 3
 
@@ -72,6 +71,7 @@ class Runner:
         publishers: Mapping[ChannelKind, Publisher],
         extractor: Extractor,
         embedder: Embedder,
+        shortlister: Shortlister,
         editor: Editor,
     ) -> None:
         self._session_factory = session_factory
@@ -79,6 +79,7 @@ class Runner:
         self._publishers = publishers
         self._extractor = extractor
         self._embedder = embedder
+        self._shortlister = shortlister
         self._editor = editor
 
     def run(self, section_slug: str, run_at: datetime) -> RunRecord:
@@ -127,8 +128,8 @@ class Runner:
     def _make_bulletin(
         self, session: Session, run: Run, since: datetime
     ) -> tuple[RunOutcome, str | None]:
-        """Thu thập, gom Tin, để Biên tập dựng Bản tin và Kiểm chứng xét nó, rồi phát; trả về kết
-        quả của Kỳ kèm lí do.
+        """Thu thập, gom Tin, sơ tuyển, để Biên tập dựng Bản tin và Kiểm chứng xét nó, rồi phát; trả
+        về kết quả của Kỳ kèm lí do.
 
         Mọi bước đều làm lại được trên cùng một Kỳ, để Kỳ bị gián đoạn chạy tiếp được.
         """
@@ -170,21 +171,48 @@ class Runner:
             # Ứng viên được lưu một lần; Kỳ chạy tiếp dùng lại đúng các ứng viên Biên tập đã thấy.
             if not run.candidates:
                 try:
-                    run.candidates = self._cluster_candidates(session, section, since, run.run_at)
+                    clusters = clustering.cluster(
+                        session,
+                        self._embedder,
+                        section.id,
+                        _run_articles(session, section, since, run.run_at),
+                        run.run_at,
+                    )
                 except Exception as error:
                     session.rollback()
                     log.exception("Gom Tin của Chuyên mục %s gặp lỗi", section.slug)
                     return RunOutcome.FAILED, f"Gom Tin gặp lỗi: {str(error).splitlines()[0]}"
+                # Lưu vector nhúng vừa tạo; không giữ giao dịch mở trong lúc chấm điểm.
+                session.commit()
+                try:
+                    ranked = self._shortlister.rank(
+                        run.editor_guideline.content, clusters, run.run_at, section.shortlist_size
+                    )
+                except ShortlistError as error:
+                    return RunOutcome.FAILED, str(error)
+                run.candidates = [
+                    Candidate(
+                        position=position,
+                        articles=list(candidate.cluster.articles),
+                        published_story_id=candidate.cluster.published_story_id,
+                        score=candidate.score,
+                        score_components=candidate.components,
+                        shortlisted=candidate.shortlisted,
+                    )
+                    for position, candidate in enumerate(ranked, start=1)
+                ]
                 session.commit()
             if not run.candidates:
                 return RunOutcome.NOT_PUBLISHED, "Không có Bài gốc mới"
+            if not run.shortlist:
+                return RunOutcome.NOT_PUBLISHED, "Không ứng viên Tin nào trong phạm vi Chuyên mục"
             assignment = Assignment(
                 section=section.name,
                 run_at=run.run_at,
                 guideline=run.editor_guideline.content,
                 verifier_guideline=run.verifier_guideline.content,
                 max_stories=section.max_stories,
-                candidates=[_for_editor(candidate, section) for candidate in run.candidates],
+                candidates=[_for_editor(candidate, section) for candidate in run.shortlist],
             )
             # Biên tập làm việc lâu; không giữ giao dịch nào mở trong lúc đó.
             session.commit()
@@ -197,7 +225,7 @@ class Runner:
                 return RunOutcome.FAILED, f"Biên tập gặp lỗi: {str(error).splitlines()[0]}"
             candidate_of = {
                 article.id: candidate
-                for candidate in run.candidates
+                for candidate in run.shortlist
                 for article in candidate.articles
             }
             run.bulletin = Bulletin(
@@ -238,26 +266,6 @@ class Runner:
         return (RunOutcome.PUBLISHED if delivered else RunOutcome.FAILED), "; ".join(
             publish_errors
         ) or None
-
-    def _cluster_candidates(
-        self, session: Session, section: Section, since: datetime, run_at: datetime
-    ) -> list[Candidate]:
-        """Gom các Bài gốc của Kỳ thành ứng viên Tin, giữ những ứng viên mới nhất."""
-        clusters = clustering.cluster(
-            session,
-            self._embedder,
-            section.id,
-            _run_articles(session, section, since, run_at),
-            run_at,
-        )
-        return [
-            Candidate(
-                position=position,
-                articles=list(c.articles),
-                published_story_id=c.published_story_id,
-            )
-            for position, c in enumerate(clusters[:MAX_CANDIDATES], start=1)
-        ]
 
     def _collect(self, session: Session, source: Source, since: datetime, run_at: datetime) -> bool:
         """Lấy và lưu Bài gốc mới của một Nguồn; trả về có lấy được hay không.

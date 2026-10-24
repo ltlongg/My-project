@@ -1,5 +1,5 @@
 """Khuôn test tại điểm "Chạy Kỳ": Nguồn giả, Kênh đăng giả, LLM theo kịch bản, bộ nhúng giả,
-đồng hồ giả, Postgres thật.
+model chấm điểm giả, đồng hồ giả, Postgres thật.
 
 Đồng hồ giả là tham số `run_at` của `Runner.run`: test tự nói "bây giờ" là lúc nào.
 """
@@ -7,7 +7,7 @@
 import json
 import math
 import os
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import count
@@ -50,6 +50,7 @@ from siftly.models import (
 from siftly.publishers import BulletinContent
 from siftly.runner import Runner
 from siftly.search import SearchResult
+from siftly.shortlisting import ATTENTION_SIGNALS, Shortlister, Signal
 from siftly.urls import normalize_url
 
 DEFAULT_URL = "postgresql+psycopg://bulletin:bulletin@127.0.0.1:54320/bulletin_test"
@@ -467,6 +468,68 @@ def _story_under_check(messages: Sequence[BaseMessage]) -> dict[str, str]:
     return story
 
 
+class RuleBasedRaterLLM(BaseChatModel):
+    """LLM giả của Sơ tuyển: ứng viên có tiêu đề chứa một chi tiết test đã đặt thì nhận mức phù
+    hợp ấy, còn lại nhận `default`.
+
+    Các bước đặt bằng `will` được dùng trước luật, để test cho nó trả lời hỏng hay ném lỗi.
+    """
+
+    default: int = 8
+    relevance: dict[str, int] = Field(default_factory=dict)
+    script: list[AIMessage | BaseException] = Field(default_factory=list)
+    received: list[list[BaseMessage]] = Field(default_factory=list)
+
+    @property
+    def _llm_type(self) -> str:
+        return "rule-based-rater"
+
+    def bind_tools(self, tools: Any, **options: Any) -> "RuleBasedRaterLLM":
+        return self
+
+    def rate(self, detail: str, relevance: int) -> None:
+        """Ứng viên nào có `detail` trong một tiêu đề thì nhận mức phù hợp `relevance`."""
+        self.relevance[detail] = relevance
+
+    def will(self, *steps: AIMessage | BaseException) -> None:
+        self.script = list(steps)
+
+    def text_received(self, call: int = -1) -> str:
+        return "\n".join(str(message.content) for message in self.received[call])
+
+    def _generate(
+        self, messages: list[BaseMessage], stop: Any = None, run_manager: Any = None, **_: Any
+    ) -> ChatResult:
+        self.received.append(list(messages))
+        if self.script:
+            step = self.script.pop(0)
+            if isinstance(step, BaseException):
+                raise step
+            return ChatResult(generations=[ChatGeneration(message=step)])
+        task = next(str(m.content) for m in messages if isinstance(m, HumanMessage))
+        candidates = [json.loads(line) for line in task.splitlines() if line.startswith("{")]
+        ratings = [
+            {
+                "id": candidate["id"],
+                "relevance": next(
+                    (
+                        relevance
+                        for detail, relevance in self.relevance.items()
+                        if any(detail in title for title in candidate["titles"])
+                    ),
+                    self.default,
+                ),
+            }
+            for candidate in candidates
+        ]
+        return ChatResult(generations=[ChatGeneration(message=ratings_reply(ratings))])
+
+
+def ratings_reply(ratings: list[dict[str, Any]]) -> AIMessage:
+    """Sơ tuyển trả điểm cho các ứng viên."""
+    return AIMessage("", tool_calls=[_call("rate", {"ratings": ratings})])
+
+
 DEFAULT_GUIDELINE = "Chọn Tin đáng đọc nhất."
 DEFAULT_VERIFIER_GUIDELINE = "Đối chiếu số liệu, tên và ngày tháng với Bài gốc."
 
@@ -482,20 +545,26 @@ class World:
     extractor: FakeExtractor = field(default_factory=FakeExtractor)
     searcher: FakeSearcher = field(default_factory=FakeSearcher)
     embedder: FakeEmbedder = field(default_factory=FakeEmbedder)
+    rater: RuleBasedRaterLLM = field(default_factory=RuleBasedRaterLLM)
     llm: ScriptedLLM = field(default_factory=ScriptedLLM)
     verifier: RuleBasedVerifierLLM = field(default_factory=RuleBasedVerifierLLM)
     runner: Runner = field(init=False)
 
     def __post_init__(self) -> None:
+        self.use_signals(ATTENTION_SIGNALS)
+        self.set_verifier_guideline(DEFAULT_VERIFIER_GUIDELINE)
+
+    def use_signals(self, signals: Mapping[str, Signal]) -> None:
+        """Sơ tuyển tính độ chú ý từ các tín hiệu này."""
         self.runner = Runner(
             self.session_factory,
             collectors={SourceKind.RSS: self.collector},
             publishers={ChannelKind.TELEGRAM: self.publisher},
             extractor=self.extractor,
             embedder=self.embedder,
+            shortlister=Shortlister(self.rater, signals),
             editor=Editor(self.llm, Verifier(self.verifier), self.searcher, self.checkpointer),
         )
-        self.set_verifier_guideline(DEFAULT_VERIFIER_GUIDELINE)
 
     def add_section(
         self,
@@ -505,6 +574,7 @@ class World:
         sources: Sequence[str],
         channels: Sequence[str],
         max_stories: int = 7,
+        shortlist_size: int = 30,
         guideline: str | None = DEFAULT_GUIDELINE,
     ) -> None:
         """Khai một Chuyên mục; Nguồn và Kênh đăng trùng địa chỉ được dùng chung.
@@ -512,7 +582,9 @@ class World:
         `guideline` là Hướng dẫn cho Biên tập, phiên bản 1; None là chưa có Hướng dẫn.
         """
         with self.session_factory.begin() as session:
-            section = Section(slug=slug, name=name, max_stories=max_stories)
+            section = Section(
+                slug=slug, name=name, max_stories=max_stories, shortlist_size=shortlist_size
+            )
             for url in sources:
                 existing = session.scalar(select(Source).where(Source.url == url))
                 section.sources.append(existing or Source(kind=SourceKind.RSS, name=url, url=url))
@@ -626,6 +698,22 @@ class World:
         with self.session_factory() as session:
             return [
                 [article.url for article in candidate.articles]
+                for candidate in session.scalars(
+                    select(Candidate).order_by(Candidate.run_id, Candidate.position)
+                )
+            ]
+
+    def stored_scores(self) -> list[tuple[list[str], float, dict[str, float], bool]]:
+        """Từng ứng viên đã lưu, theo Kỳ rồi theo thứ hạng: địa chỉ các Bài gốc, điểm Sơ tuyển, các
+        điểm thành phần, và có tới Biên tập không."""
+        with self.session_factory() as session:
+            return [
+                (
+                    [article.url for article in candidate.articles],
+                    candidate.score or 0.0,
+                    candidate.score_components or {},
+                    candidate.shortlisted,
+                )
                 for candidate in session.scalars(
                     select(Candidate).order_by(Candidate.run_id, Candidate.position)
                 )

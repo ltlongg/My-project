@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     # Model mặc định, và model riêng của từng vai trò; để trống thì dùng model mặc định.
     model: str | None = None
+    shortlist_model: str | None = None
     editor_model: str | None = None
     verifier_model: str | None = None
     # Dịch vụ tạo vector nhúng để gom Tin: một endpoint tương thích OpenAI, mặc định là Jina.
