@@ -1,0 +1,21 @@
+<!doctype html>
+<!-- Hộp hỏi cookie kiểu OneTrust phủ giữa màn hình (đỏ) và khoá cuộn trang. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sample story</title>
+<style>
+  body { margin: 0; overflow: hidden; font-family: sans-serif; }
+  h1 { margin: 400px 0 0; padding: 24px; min-height: 160px; background: #0000ff; color: #fff; }
+  p { margin: 16px 24px; height: 1500px; }
+  #onetrust-consent-sdk { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5); z-index: 1000; }
+  #onetrust-banner-sdk { position: absolute; left: 20px; right: 20px; top: 150px; height: 400px; background: #ff0000; }
+</style>
+</head>
+<body>
+<main><h1>Sample story headline behind a consent dialog</h1><p>Lead paragraph.</p></main>
+<div id="onetrust-consent-sdk">
+  <div id="onetrust-banner-sdk">We value your privacy. <button>Accept All</button></div>
+</div>
+</body>
+</html>

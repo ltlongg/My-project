@@ -1,5 +1,7 @@
 """Dữ liệu khởi tạo: đủ để chạy Kỳ đầu tiên khi chưa có trang quản lí."""
 
+from datetime import time
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -14,6 +16,8 @@ from siftly.models import (
 )
 
 TECH_SLUG = "tech"
+# Giờ phát theo giờ Việt Nam.
+TECH_PUBLISH_TIME = time(8)
 STARTER_RSS = ("VnExpress Khoa học công nghệ", "https://vnexpress.net/rss/khoa-hoc-cong-nghe.rss")
 # Bản tạm để Biên tập chạy được; ticket 14 soạn Hướng dẫn khởi đầu đầy đủ.
 TECH_EDITOR_GUIDELINE = """\
@@ -44,15 +48,17 @@ phải lí do để không đạt."""
 
 
 def seed(session_factory: sessionmaker[Session], telegram_chat_id: str | None) -> None:
-    """Tạo Chuyên mục công nghệ với một Nguồn RSS, Hướng dẫn cho Biên tập, Hướng dẫn chung cho
-    Kiểm chứng và, nếu đã biết mã nhóm, một Kênh đăng Telegram.
+    """Tạo Chuyên mục công nghệ phát lúc 8:00 với một Nguồn RSS, Hướng dẫn cho Biên tập, Hướng dẫn
+    chung cho Kiểm chứng và, nếu đã biết mã nhóm, một Kênh đăng Telegram.
 
     Chạy lại không tạo trùng và không ghi đè thứ đã có; chỉ bổ sung thứ còn thiếu.
     """
     with session_factory.begin() as session:
         section = session.scalar(select(Section).where(Section.slug == TECH_SLUG))
         if section is None:
-            section = Section(slug=TECH_SLUG, name="Công nghệ", max_stories=7)
+            section = Section(
+                slug=TECH_SLUG, name="Công nghệ", max_stories=7, publish_time=TECH_PUBLISH_TIME
+            )
             session.add(section)
 
         name, url = STARTER_RSS

@@ -6,6 +6,8 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from langgraph.checkpoint.postgres import PostgresSaver
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -32,10 +34,22 @@ def open_checkpointer(engine: Engine) -> Iterator[PostgresSaver]:
         yield checkpointer
 
 
-def upgrade(engine: Engine) -> None:
-    """Đưa lược đồ lên phiên bản mới nhất."""
+def _config() -> Config:
     config = Config()
     config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    return config
+
+
+def is_up_to_date(engine: Engine) -> bool:
+    """Lược đồ đã ở phiên bản mới nhất chưa."""
+    with engine.connect() as connection:
+        current = MigrationContext.configure(connection).get_current_heads()
+    return set(current) == set(ScriptDirectory.from_config(_config()).get_heads())
+
+
+def upgrade(engine: Engine) -> None:
+    """Đưa lược đồ lên phiên bản mới nhất."""
+    config = _config()
     with engine.begin() as connection:
         config.attributes["connection"] = connection
         command.upgrade(config, "head")

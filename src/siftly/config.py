@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://bulletin:bulletin@127.0.0.1:54320/bulletin"
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
+    # Mã người dùng Telegram của chủ hệ thống: bot nhắn riêng tới đây.
+    telegram_owner_id: str | None = None
     # Endpoint LLM tương thích OpenAI.
     openai_base_url: str | None = None
     openai_api_key: str | None = None
@@ -29,3 +31,6 @@ class Settings(BaseSettings):
     search_provider: Literal["tavily", "brave"] = "tavily"
     tavily_api_key: str | None = None
     brave_api_key: str | None = None
+    # Chromium để chụp ảnh Bài gốc: địa chỉ WebSocket của một Playwright server, như dịch vụ
+    # browser trong compose.yaml. Để trống thì tự mở Chromium cài bằng `playwright install`.
+    browser_url: str | None = None

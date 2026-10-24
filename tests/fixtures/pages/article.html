@@ -1,0 +1,52 @@
+<!doctype html>
+<!-- Bài báo mẫu có những thứ hay che bài: header dính và header cố định có phần con tự đặt
+     visibility (xanh lá), quảng cáo cao phía trên tiêu đề, thanh hỏi cookie ở đáy (đỏ), quảng cáo
+     phủ toàn màn hình (vàng), và một khối chèn thêm phía trên tiêu đề sau khi trang tải xong.
+     Tiêu đề có nền xanh dương để test tìm thấy trong ảnh. -->
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>Bài mẫu - Báo Mẫu</title>
+<script src="https://cdn.cookielaw.org/scripttemplates/otSDKStub.js"></script>
+<style>
+  body { margin: 0; font-family: sans-serif; background: #fff; }
+  .site-header { position: sticky; top: 0; height: 80px; background: #00ff00; z-index: 10; }
+  .menu { position: fixed; top: 0; left: 0; right: 0; z-index: 20; }
+  .menu a { visibility: visible; display: block; height: 60px; background: #00ff00; }
+  .ad { height: 900px; background: #eee; }
+  h1 { margin: 0; padding: 24px; min-height: 160px; background: #0000ff; color: #fff; font-size: 36px; }
+  p { margin: 16px 24px; font-size: 18px; line-height: 1.6; color: #333; }
+  .cookie-bar { position: fixed; left: 0; right: 0; bottom: 0; height: 220px; background: #ff0000; z-index: 100; }
+  .interstitial { position: fixed; inset: 0; background: #ffff00; z-index: 50; }
+</style>
+</head>
+<body>
+<header class="site-header">Báo Mẫu</header>
+<nav class="menu"><a href="/">Trang chủ</a></nav>
+<div class="ad">Quảng cáo</div>
+<main>
+  <article>
+    <h1>Tiêu đề của bài mẫu, nằm dưới một quảng cáo cao</h1>
+    <p>Đoạn mở đầu của bài mẫu nói ngay điều gì đã xảy ra.</p>
+    <p>Đoạn thứ hai kể tiếp chi tiết.</p>
+    <p>Đoạn thứ ba.</p>
+    <p>Đoạn thứ tư.</p>
+    <p>Đoạn thứ năm.</p>
+    <p>Đoạn thứ sáu.</p>
+    <p>Đoạn thứ bảy.</p>
+    <p>Đoạn thứ tám.</p>
+    <p>Đoạn thứ chín.</p>
+  </article>
+</main>
+<div style="height: 2000px"></div>
+<div class="cookie-bar">Chúng tôi dùng cookie để cải thiện trải nghiệm. <button>Đồng ý</button></div>
+<div class="interstitial">Quảng cáo toàn màn hình <button>Đóng</button></div>
+<script>
+  addEventListener("load", () => setTimeout(() => {
+    const late = document.createElement("div");
+    late.style.cssText = "height: 600px; background: #eee";
+    document.querySelector("main").prepend(late);
+  }, 100));
+</script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 """Phát hành: mỗi loại Kênh đăng là một bộ phát cùng giao diện."""
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
@@ -23,6 +24,8 @@ class StoryContent:
     url: str
     # Tin "Cập nhật": có diễn biến mới so với một Tin đã phát.
     is_update: bool = False
+    # Ảnh JPEG đi kèm Tin: ảnh chụp hay ảnh đại diện của Bài gốc chính; không có thì để trống.
+    image: bytes | None = field(default=None, repr=False)
 
     @property
     def labeled_title(self) -> str:
@@ -44,6 +47,19 @@ class BulletinContent:
 
 
 class Publisher(Protocol):
-    def publish(self, address: str, bulletin: BulletinContent) -> None:
-        """Phát `bulletin` tới Kênh đăng ở `address`. Ném lỗi khi không phát được."""
+    def publish(
+        self,
+        address: str,
+        bulletin: BulletinContent,
+        *,
+        skip: int = 0,
+        on_sent: Callable[[], None] = lambda: None,
+    ) -> None:
+        """Phát `bulletin` tới Kênh đăng ở `address`. Ném lỗi khi không phát được.
+
+        Bộ phát gửi Bản tin thành một hay nhiều phần theo thứ tự, luôn như nhau với cùng một Bản
+        tin, ví dụ mỗi Tin một tin nhắn. Nó gọi `on_sent` ngay sau mỗi phần tới nơi, và bỏ qua
+        `skip` phần đầu đã tới nơi ở lần phát trước, để phát tiếp sau khi hỏng giữa chừng không gửi
+        lại phần nào.
+        """
         ...

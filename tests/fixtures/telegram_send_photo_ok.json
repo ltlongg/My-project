@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "result": {
+    "message_id": 43,
+    "from": {"id": 123456, "is_bot": true, "first_name": "Bản tin", "username": "ban_tin_bot"},
+    "chat": {"id": -1001234567890, "title": "Nhóm thử", "type": "supergroup"},
+    "date": 1791334801,
+    "photo": [
+      {"file_id": "AgACAgUAAxkDAAMrZ1", "file_unique_id": "AQADs7k", "file_size": 1488, "width": 60, "height": 90},
+      {"file_id": "AgACAgUAAxkDAAMrZ2", "file_unique_id": "AQADs7m", "file_size": 21354, "width": 213, "height": 320},
+      {"file_id": "AgACAgUAAxkDAAMrZ3", "file_unique_id": "AQADs7x", "file_size": 98213, "width": 853, "height": 1280}
+    ],
+    "caption": "Tiêu đề\n\nTóm tắt.\n\nhttps://bao.example/a",
+    "caption_entities": [
+      {"offset": 0, "length": 7, "type": "bold"},
+      {"offset": 18, "length": 21, "type": "text_link", "url": "https://bao.example/a"}
+    ]
+  }
+}

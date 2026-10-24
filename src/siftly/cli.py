@@ -1,23 +1,37 @@
-"""Dòng lệnh `siftly`: nạp dữ liệu khởi tạo, chạy một Kỳ ngay bây giờ, thử endpoint LLM."""
+"""Dòng lệnh `siftly`: nạp dữ liệu khởi tạo, chạy Lịch, chạy một Kỳ ngay bây giờ, thử endpoint
+LLM."""
 
 import argparse
 import io
 import logging
 import sys
-from collections.abc import Sequence
+import time
+from collections.abc import Iterator, Sequence
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 
 import httpx
 from langchain_openai import ChatOpenAI
+from playwright.sync_api import sync_playwright
 from pydantic import SecretStr
+from sqlalchemy import Engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from siftly.agents.editor import Editor
 from siftly.agents.verifier import Verifier
 from siftly.collectors.rss import RssCollector
 from siftly.config import Settings
-from siftly.db import make_engine, make_session_factory, open_checkpointer, upgrade
+from siftly.db import (
+    is_up_to_date,
+    make_engine,
+    make_session_factory,
+    open_checkpointer,
+    upgrade,
+)
 from siftly.embeddings.endpoint import EndpointEmbedder
 from siftly.extractors.article import ArticleExtractor
+from siftly.images.camera import ArticleCamera
+from siftly.images.screenshot import PlaywrightScreenshotter, open_browser
 from siftly.llm_probe import (
     EndpointError,
     LLMEndpoint,
@@ -27,14 +41,20 @@ from siftly.llm_probe import (
     report,
 )
 from siftly.models import ChannelKind, RunOutcome, SourceKind
+from siftly.notifications import TelegramNotifier
 from siftly.publishers.telegram import TelegramPublisher
-from siftly.runner import Runner
+from siftly.runner import RunInProgressError, Runner
+from siftly.scheduler import Scheduler
 from siftly.search import Searcher
 from siftly.search.brave import BraveSearch
 from siftly.search.tavily import TavilySearch
 from siftly.seed import TECH_SLUG, seed
 from siftly.shortlisting import Shortlister
 
+log = logging.getLogger(__name__)
+
+# Lịch xét việc cần làm mỗi phút một lần.
+TICK_SECONDS = 60
 OUTCOME_LABELS = {
     RunOutcome.PUBLISHED: "Đã phát",
     RunOutcome.NOT_PUBLISHED: "Không phát",
@@ -56,6 +76,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="siftly", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init", help="Nâng cấp lược đồ và nạp dữ liệu khởi tạo")
+    commands.add_parser(
+        "serve",
+        help="Chạy Lịch: thu thập định kỳ, chạy Kỳ đúng giờ phát, thử lại và nhắn riêng khi hỏng",
+    )
     run_command = commands.add_parser("run", help="Chạy một Kỳ cho một Chuyên mục ngay bây giờ")
     run_command.add_argument("section", nargs="?", default=TECH_SLUG, help="Mã Chuyên mục")
     run_command.add_argument(
@@ -93,27 +117,92 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("Đã nạp dữ liệu khởi tạo.")
         return 0
 
+    if not is_up_to_date(engine):
+        print("Lược đồ chưa ở phiên bản mới nhất; chạy `siftly init` trước.", file=sys.stderr)
+        return 2
+    required = _missing(settings)
+    if args.command == "serve" and not settings.telegram_owner_id:
+        required.append("TELEGRAM_OWNER_ID")
+    if required:
+        print(f"Thiếu {', '.join(required)}; điền vào .env rồi chạy lại.", file=sys.stderr)
+        return 2
+    assert settings.telegram_bot_token
+
+    if args.command == "serve":
+        assert settings.telegram_owner_id
+        with _open_runner(settings, engine, session_factory) as (runner, client):
+            notifier = TelegramNotifier(
+                client, settings.telegram_bot_token, settings.telegram_owner_id
+            )
+            scheduler = Scheduler(session_factory, runner, notifier, lambda: datetime.now(UTC))
+            print("Lịch đang chạy; Ctrl+C để dừng.")
+            try:
+                while True:
+                    try:
+                        scheduler.tick()
+                    except Exception:
+                        log.exception("Lịch gặp lỗi; thử lại ở lượt sau")
+                    time.sleep(TICK_SECONDS)
+            except KeyboardInterrupt:
+                return 0
+
+    with _open_runner(settings, engine, session_factory) as (runner, _):
+        try:
+            if args.resume:
+                record = runner.resume(args.section)
+            else:
+                record = runner.run(args.section, datetime.now(UTC))
+        except LookupError as error:
+            print(f"{error}. Đã chạy `siftly init` chưa?", file=sys.stderr)
+            return 2
+        except RunInProgressError as error:
+            print(f"{error}; chờ nó xong rồi chạy lại.", file=sys.stderr)
+            return 2
+
+    if record is None:
+        print("Kỳ gần nhất đã có kết quả; không có gì để chạy tiếp.")
+        return 0
+    assert record.outcome is not None
+    print(f"{OUTCOME_LABELS[record.outcome]}" + (f": {record.reason}" if record.reason else ""))
+    if record.editor_guideline_version is not None:
+        print(
+            f"Hướng dẫn của Biên tập: phiên bản {record.editor_guideline_version}; "
+            f"của Kiểm chứng: phiên bản {record.verifier_guideline_version}"
+        )
+    stories = record.bulletin.stories if record.bulletin else ()
+    for position, story in enumerate(stories, start=1):
+        print(f"  {position}. {story.labeled_title}\n     {story.summary}\n     {story.url}")
+        print(f"     {'Có ảnh' if story.image else 'Không ảnh'}")
+    return 1 if record.outcome is RunOutcome.FAILED else 0
+
+
+def _missing(settings: Settings) -> list[str]:
+    """Tên các biến môi trường cần để chạy Kỳ mà còn để trống."""
     search_keys = {"tavily": settings.tavily_api_key, "brave": settings.brave_api_key}
-    shortlist_model = settings.shortlist_model or settings.model
-    editor_model = settings.editor_model or settings.model
-    verifier_model = settings.verifier_model or settings.model
-    missing = [
+    return [
         name
         for name, value in {
             "TELEGRAM_BOT_TOKEN": settings.telegram_bot_token,
             "OPENAI_BASE_URL": settings.openai_base_url,
             "OPENAI_API_KEY": settings.openai_api_key,
-            "SHORTLIST_MODEL hoặc MODEL": shortlist_model,
-            "EDITOR_MODEL hoặc MODEL": editor_model,
-            "VERIFIER_MODEL hoặc MODEL": verifier_model,
+            "SHORTLIST_MODEL hoặc MODEL": settings.shortlist_model or settings.model,
+            "EDITOR_MODEL hoặc MODEL": settings.editor_model or settings.model,
+            "VERIFIER_MODEL hoặc MODEL": settings.verifier_model or settings.model,
             f"{settings.search_provider.upper()}_API_KEY": search_keys[settings.search_provider],
         }.items()
         if not value
     ]
-    if missing:
-        print(f"Thiếu {', '.join(missing)}; điền vào .env rồi chạy lại.", file=sys.stderr)
-        return 2
-    assert settings.telegram_bot_token and settings.openai_api_key
+
+
+@contextmanager
+def _open_runner(
+    settings: Settings, engine: Engine, session_factory: sessionmaker[Session]
+) -> Iterator[tuple[Runner, httpx.Client]]:
+    """Dựng Chạy Kỳ với các bộ nối thật, kèm client HTTP chung; mọi biến cần thiết đã có."""
+    shortlist_model = settings.shortlist_model or settings.model
+    editor_model = settings.editor_model or settings.model
+    verifier_model = settings.verifier_model or settings.model
+    assert settings.telegram_bot_token
     assert shortlist_model and editor_model and verifier_model
     with (
         httpx.Client(
@@ -122,6 +211,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Model nhúng chạy trên CPU: một lô văn bản có thể mất vài chục giây.
         httpx.Client(timeout=httpx.Timeout(300, connect=10)) as embedding_client,
         open_checkpointer(engine) as checkpointer,
+        sync_playwright() as playwright,
+        closing(
+            PlaywrightScreenshotter(lambda: open_browser(playwright, settings.browser_url))
+        ) as screenshotter,
     ):
         searcher: Searcher = (
             BraveSearch(client, settings.brave_api_key or "")
@@ -148,30 +241,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 searcher,
                 checkpointer,
             ),
+            camera=ArticleCamera(screenshotter, client),
         )
-        try:
-            if args.resume:
-                record = runner.resume(args.section)
-            else:
-                record = runner.run(args.section, datetime.now(UTC))
-        except LookupError as error:
-            print(f"{error}. Đã chạy `siftly init` chưa?", file=sys.stderr)
-            return 2
-
-    if record is None:
-        print("Kỳ gần nhất đã có kết quả; không có gì để chạy tiếp.")
-        return 0
-    assert record.outcome is not None
-    print(f"{OUTCOME_LABELS[record.outcome]}" + (f": {record.reason}" if record.reason else ""))
-    if record.editor_guideline_version is not None:
-        print(
-            f"Hướng dẫn của Biên tập: phiên bản {record.editor_guideline_version}; "
-            f"của Kiểm chứng: phiên bản {record.verifier_guideline_version}"
-        )
-    stories = record.bulletin.stories if record.bulletin else ()
-    for position, story in enumerate(stories, start=1):
-        print(f"  {position}. {story.labeled_title}\n     {story.summary}\n     {story.url}")
-    return 1 if record.outcome is RunOutcome.FAILED else 0
+        yield runner, client
 
 
 def _llm(settings: Settings, model: str) -> ChatOpenAI:

@@ -1,15 +1,16 @@
 """Khuôn test tại điểm "Chạy Kỳ": Nguồn giả, Kênh đăng giả, LLM theo kịch bản, bộ nhúng giả,
-model chấm điểm giả, đồng hồ giả, Postgres thật.
+model chấm điểm giả, bộ chụp ảnh giả, thông báo riêng giả, đồng hồ giả, Postgres thật.
 
-Đồng hồ giả là tham số `run_at` của `Runner.run`: test tự nói "bây giờ" là lúc nào.
+Đồng hồ giả là tham số `run_at` của `Runner.run`, và `World.clock` của Lịch: test tự nói "bây giờ"
+là lúc nào.
 """
 
 import json
 import math
 import os
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass, field, replace
+from datetime import datetime, time
 from itertools import count
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -33,6 +34,7 @@ from siftly.db import (
     open_checkpointer,
     upgrade,
 )
+from siftly.images import Capture, ImageKind
 from siftly.models import (
     Article,
     Base,
@@ -45,10 +47,12 @@ from siftly.models import (
     Source,
     SourceKind,
     Story,
+    StoryImage,
     Verification,
 )
-from siftly.publishers import BulletinContent
+from siftly.publishers import BulletinContent, StoryContent
 from siftly.runner import Runner
+from siftly.scheduler import Scheduler
 from siftly.search import SearchResult
 from siftly.shortlisting import ATTENTION_SIGNALS, Shortlister, Signal
 from siftly.urls import normalize_url
@@ -106,6 +110,8 @@ class FakeCollector:
     """Bộ thu thập giả: trả về đúng những Bài gốc test đã đặt cho từng địa chỉ Nguồn."""
 
     def __init__(self) -> None:
+        # Địa chỉ Nguồn ở từng lần thu thập, theo thứ tự.
+        self.fetched: list[str] = []
         self._articles: dict[str, Sequence[NewArticle]] = {}
         self._errors: dict[str, Exception] = {}
 
@@ -117,28 +123,47 @@ class FakeCollector:
         self._errors[url] = error
 
     def collect(self, url: str, since: datetime) -> Sequence[NewArticle]:
+        self.fetched.append(url)
         if url in self._errors:
             raise self._errors[url]
         return self._articles.get(url, ())
 
 
 class FakePublisher:
-    """Bộ phát giả: ghi lại mọi Bản tin tới từng địa chỉ Kênh đăng."""
+    """Bộ phát giả: mỗi Tin là một phần của Bản tin. Ghi lại những gì tới từng địa chỉ Kênh đăng."""
 
     def __init__(self) -> None:
+        # Mỗi lần phát có Tin tới nơi: địa chỉ, và Bản tin chỉ gồm những Tin đã tới ở lần ấy.
         self.received: list[tuple[str, BulletinContent]] = []
-        self._errors: dict[str, Exception] = {}
+        self._errors: dict[str, tuple[BaseException, int]] = {}
 
-    def fail(self, address: str, error: Exception) -> None:
-        self._errors[address] = error
+    def fail(self, address: str, error: BaseException, after: int = 0) -> None:
+        """Phát tới `address` ném `error` sau khi `after` Tin đầu đã tới nơi; một BaseException
+        giả lập tiến trình bị dừng."""
+        self._errors[address] = (error, after)
 
     def fix(self, address: str) -> None:
         del self._errors[address]
 
-    def publish(self, address: str, bulletin: BulletinContent) -> None:
-        if address in self._errors:
-            raise self._errors[address]
-        self.received.append((address, bulletin))
+    def publish(
+        self,
+        address: str,
+        bulletin: BulletinContent,
+        *,
+        skip: int = 0,
+        on_sent: Callable[[], None] = lambda: None,
+    ) -> None:
+        delivered: list[StoryContent] = []
+        try:
+            for position in range(skip, len(bulletin.stories)):
+                error, after = self._errors.get(address, (None, 0))
+                if error is not None and position >= after:
+                    raise error
+                delivered.append(bulletin.stories[position])
+                on_sent()
+        finally:
+            if delivered:
+                self.received.append((address, replace(bulletin, stories=tuple(delivered))))
 
 
 class FakeExtractor:
@@ -160,6 +185,55 @@ class FakeExtractor:
         if url in self._errors:
             raise self._errors[url]
         return self._full_texts.get(url, f"Toàn văn của {url}.")
+
+
+class FakeCamera:
+    """Bộ chụp ảnh giả: trả về ảnh test đã đặt cho từng địa chỉ, còn lại là không ảnh."""
+
+    def __init__(self) -> None:
+        self.captured: list[str] = []
+        self._captures: dict[str, Capture] = {}
+        self._errors: dict[str, Exception] = {}
+
+    def has(self, url: str, capture: Capture) -> None:
+        self._captures[url] = capture
+
+    def fail(self, url: str, error: Exception) -> None:
+        """Lần chụp `url` ném `error`, như một bộ chụp ảnh không giữ đúng giao diện."""
+        self._errors[url] = error
+
+    def capture(self, url: str) -> Capture:
+        self.captured.append(url)
+        if url in self._errors:
+            raise self._errors[url]
+        return self._captures.get(url, Capture(ImageKind.NONE, None, ("Không có ảnh",)))
+
+
+class FakeNotifier:
+    """Thông báo riêng giả: ghi lại mọi tin nhắn tới chủ hệ thống."""
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+        self._error: Exception | None = None
+
+    def fail(self, error: Exception | None) -> None:
+        """Mọi lần nhắn sau đều ném `error`; None là nhắn được bình thường."""
+        self._error = error
+
+    def notify(self, text: str) -> None:
+        if self._error is not None:
+            raise self._error
+        self.sent.append(text)
+
+
+@dataclass
+class FakeClock:
+    """Đồng hồ giả của Lịch: trả về đúng lúc test đặt."""
+
+    now: datetime = field(default_factory=lambda: at(1, 0))
+
+    def __call__(self) -> datetime:
+        return self.now
 
 
 class FakeSearcher:
@@ -548,7 +622,11 @@ class World:
     rater: RuleBasedRaterLLM = field(default_factory=RuleBasedRaterLLM)
     llm: ScriptedLLM = field(default_factory=ScriptedLLM)
     verifier: RuleBasedVerifierLLM = field(default_factory=RuleBasedVerifierLLM)
+    camera: FakeCamera = field(default_factory=FakeCamera)
+    notifier: FakeNotifier = field(default_factory=FakeNotifier)
+    clock: FakeClock = field(default_factory=FakeClock)
     runner: Runner = field(init=False)
+    scheduler: Scheduler = field(init=False)
 
     def __post_init__(self) -> None:
         self.use_signals(ATTENTION_SIGNALS)
@@ -564,7 +642,18 @@ class World:
             embedder=self.embedder,
             shortlister=Shortlister(self.rater, signals),
             editor=Editor(self.llm, Verifier(self.verifier), self.searcher, self.checkpointer),
+            camera=self.camera,
         )
+        self.restart()
+
+    def restart(self) -> None:
+        """Dựng lại Lịch như khi dịch vụ khởi động lại: chỉ còn những gì đã lưu."""
+        self.scheduler = Scheduler(self.session_factory, self.runner, self.notifier, self.clock)
+
+    def tick(self, now: datetime) -> None:
+        """Lịch làm những việc đã tới giờ vào lúc `now`."""
+        self.clock.now = now
+        self.scheduler.tick()
 
     def add_section(
         self,
@@ -576,14 +665,22 @@ class World:
         max_stories: int = 7,
         shortlist_size: int = 30,
         guideline: str | None = DEFAULT_GUIDELINE,
+        publish_time: time = time(8),
+        paused: bool = False,
     ) -> None:
         """Khai một Chuyên mục; Nguồn và Kênh đăng trùng địa chỉ được dùng chung.
 
         `guideline` là Hướng dẫn cho Biên tập, phiên bản 1; None là chưa có Hướng dẫn.
+        `publish_time` là giờ phát theo giờ Việt Nam.
         """
         with self.session_factory.begin() as session:
             section = Section(
-                slug=slug, name=name, max_stories=max_stories, shortlist_size=shortlist_size
+                slug=slug,
+                name=name,
+                max_stories=max_stories,
+                shortlist_size=shortlist_size,
+                publish_time=publish_time,
+                is_paused=paused,
             )
             for url in sources:
                 existing = session.scalar(select(Source).where(Source.url == url))
@@ -596,6 +693,13 @@ class World:
             session.add(section)
         if guideline is not None:
             self.set_guideline(slug, guideline)
+
+    def set_paused(self, section_slug: str, paused: bool) -> None:
+        """Tạm dừng hoặc bật lại một Chuyên mục."""
+        with self.session_factory.begin() as session:
+            session.execute(
+                update(Section).where(Section.slug == section_slug).values(is_paused=paused)
+            )
 
     def set_guideline(self, section_slug: str, content: str) -> int:
         """Đặt một phiên bản Hướng dẫn mới của Biên tập có hiệu lực; trả về số phiên bản."""
@@ -718,6 +822,15 @@ class World:
                     select(Candidate).order_by(Candidate.run_id, Candidate.position)
                 )
             ]
+
+    def stored_images(self) -> dict[str, tuple[ImageKind, bytes | None, str | None]]:
+        """Ảnh đã lưu của từng Tin, theo địa chỉ Bài gốc chính: loại ảnh, ảnh, lí do không dùng
+        được cách tốt hơn."""
+        with self.session_factory() as session:
+            return {
+                story.primary_article.url: (image.kind, image.data, image.fallback_reason)
+                for image, story in session.execute(select(StoryImage, Story).join(Story))
+            }
 
     def verifications(self, url: str) -> list[tuple[str, str, bool, str]]:
         """Các lượt Kiểm chứng đã lưu của Tin về Bài gốc ở `url`, theo thứ tự: tiêu đề và tóm

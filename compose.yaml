@@ -1,5 +1,5 @@
-# Môi trường phát triển: Postgres. Vector nhúng lấy từ dịch vụ ngoài (xem EMBEDDING_* trong .env).
-# bằng uv.
+# Môi trường phát triển: Postgres và Chromium để chụp ảnh. Ứng dụng chạy ngoài Docker bằng uv; vector
+# nhúng lấy từ dịch vụ ngoài (xem EMBEDDING_* trong .env).
 services:
   db:
     image: pgvector/pgvector:pg17
@@ -16,6 +16,24 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  # Chromium để chụp ảnh Bài gốc; ứng dụng kết nối qua BROWSER_URL. Phiên bản phải khớp gói
+  # playwright trong uv.lock.
+  browser:
+    image: mcr.microsoft.com/playwright:v1.64.1-noble
+    command: npx -y playwright@1.64.1 run-server --port 3000 --host 0.0.0.0
+    init: true
+    ports:
+      - "127.0.0.1:${BROWSER_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - require('net').connect(3000, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))
+      interval: 2s
+      timeout: 3s
+      retries: 60
 
 volumes:
   db:

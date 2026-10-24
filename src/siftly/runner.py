@@ -1,7 +1,8 @@
 """Chạy Kỳ: lối vào duy nhất để làm một Bản tin cho một Chuyên mục tại một thời điểm."""
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -16,12 +17,14 @@ from siftly.agents.verifier import VerifierError
 from siftly.collectors import Collector, NewArticle
 from siftly.embeddings import Embedder
 from siftly.extractors import Extractor
+from siftly.images import Camera, Capture, ImageKind
 from siftly.models import (
     Article,
     Bulletin,
     Candidate,
     Channel,
     ChannelKind,
+    Delivery,
     Guideline,
     Role,
     Run,
@@ -30,6 +33,7 @@ from siftly.models import (
     Source,
     SourceKind,
     Story,
+    StoryImage,
     Verification,
     article_sources,
     section_sources,
@@ -47,6 +51,14 @@ FIRST_RUN_WINDOW = timedelta(hours=24)
 MAX_ARTICLES = 500
 # Bản tin có ít Tin qua Kiểm chứng hơn số này thì không phát, coi như Kỳ hỏng.
 MIN_STORIES = 3
+# Thu thập định kỳ lấy Bài gốc xuất bản trong khoảng này; bài đã có thì không lưu lại.
+COLLECT_WINDOW = timedelta(hours=24)
+# Khoá tư vấn của Postgres giữ suốt lúc làm một Kỳ: số đầu là loại khoá, số sau là mã Chuyên mục.
+RUN_LOCK = 1
+
+
+class RunInProgressError(Exception):
+    """Một tiến trình khác đang làm một Kỳ của cùng Chuyên mục."""
 
 
 @dataclass(frozen=True)
@@ -61,6 +73,8 @@ class RunRecord:
     # Phiên bản Hướng dẫn mà Biên tập và Kiểm chứng đã dùng; chưa tới bước Biên tập thì để trống.
     editor_guideline_version: int | None = None
     verifier_guideline_version: int | None = None
+    # Số lần đã chạy Kỳ: lần đầu, cộng các lần thử lại.
+    attempts: int = 1
 
 
 class Runner:
@@ -73,6 +87,7 @@ class Runner:
         embedder: Embedder,
         shortlister: Shortlister,
         editor: Editor,
+        camera: Camera,
     ) -> None:
         self._session_factory = session_factory
         self._collectors = collectors
@@ -81,19 +96,24 @@ class Runner:
         self._embedder = embedder
         self._shortlister = shortlister
         self._editor = editor
+        self._camera = camera
 
     def run(self, section_slug: str, run_at: datetime) -> RunRecord:
-        """Chạy một Kỳ cho Chuyên mục `section_slug` tại `run_at`."""
+        """Chạy một Kỳ cho Chuyên mục `section_slug` tại `run_at`.
+
+        Ném RunInProgressError khi một tiến trình khác đang làm một Kỳ của Chuyên mục này.
+        """
         if run_at.tzinfo is None:
             raise ValueError("run_at phải có múi giờ")
         with self._session_factory() as session:
             section = _section(session, section_slug)
-            since = _since(session, section, run_at)
-            run = Run(section=section, run_at=run_at)
-            session.add(run)
-            # Kỳ được lưu trước khi làm gì khác, để lỗi nào cũng để lại một Kỳ có kết quả.
-            session.commit()
-            return self._finish(session, run, since)
+            with self._exclusive(section):
+                since = _since(session, section, run_at)
+                run = Run(section=section, run_at=run_at)
+                session.add(run)
+                # Kỳ được lưu trước khi làm gì khác, để lỗi nào cũng để lại một Kỳ có kết quả.
+                session.commit()
+                return self._finish(session, run, since)
 
     def resume(self, section_slug: str) -> RunRecord | None:
         """Chạy tiếp Kỳ gần nhất của Chuyên mục nếu nó bị gián đoạn giữa chừng.
@@ -103,15 +123,82 @@ class Runner:
         """
         with self._session_factory() as session:
             section = _section(session, section_slug)
-            run = session.scalar(
-                select(Run)
-                .where(Run.section_id == section.id)
-                .order_by(Run.run_at.desc(), Run.id.desc())
-                .limit(1)
+            with self._exclusive(section):
+                run = latest_run(session, section.id)
+                if run is None or run.outcome is not None:
+                    return None
+                return self._finish(session, run, _since(session, section, run.run_at))
+
+    def retry(self, section_slug: str) -> RunRecord | None:
+        """Chạy lại Kỳ gần nhất của Chuyên mục nếu nó hỏng, như một lần thử nữa của chính Kỳ ấy.
+
+        Những bước đã xong được dùng lại: Bản tin đã dựng không bị viết lại, và Kênh đăng đã nhận
+        phần nào của Bản tin thì không nhận lại phần đó. Trả về None khi Kỳ gần nhất không hỏng.
+        """
+        with self._session_factory() as session:
+            section = _section(session, section_slug)
+            with self._exclusive(section):
+                run = latest_run(session, section.id)
+                if run is None or run.outcome is not RunOutcome.FAILED:
+                    return None
+                run.attempts += 1
+                run.outcome = run.reason = run.retry_at = None
+                session.commit()
+                return self._finish(session, run, _since(session, section, run.run_at))
+
+    def abandon(self, section_slug: str, reason: str) -> RunRecord | None:
+        """Kết thúc Kỳ gần nhất của Chuyên mục là hỏng, với lí do `reason`, nếu nó bị gián đoạn
+        giữa chừng; dùng khi đã quá muộn để chạy tiếp. Trả về None khi Kỳ gần nhất đã có kết quả.
+        """
+        with self._session_factory() as session:
+            section = _section(session, section_slug)
+            with self._exclusive(section):
+                run = latest_run(session, section.id)
+                if run is None or run.outcome is not None:
+                    return None
+                run.outcome, run.reason = RunOutcome.FAILED, reason
+                session.commit()
+                return _record(run)
+
+    def collect(self, now: datetime) -> None:
+        """Thu thập Bài gốc mới của mọi Nguồn thuộc một Chuyên mục chưa tạm dừng.
+
+        Lỗi được ghi lại ở từng Nguồn, không lan ra ngoài.
+        """
+        with self._session_factory() as session:
+            in_use = (
+                select(section_sources.c.source_id)
+                .join(Section, Section.id == section_sources.c.section_id)
+                .where(Section.is_paused.is_(False))
             )
-            if run is None or run.outcome is not None:
-                return None
-            return self._finish(session, run, _since(session, section, run.run_at))
+            sources = session.scalars(
+                select(Source).where(Source.id.in_(in_use)).order_by(Source.id)
+            ).all()
+            for source in sources:
+                self._collect(session, source, now - COLLECT_WINDOW, now)
+                session.commit()
+
+    @contextmanager
+    def _exclusive(self, section: Section) -> Iterator[None]:
+        """Giữ khoá của Chuyên mục trong lúc làm một Kỳ, để hai tiến trình, như Lịch và một lệnh
+        chạy tay, không cùng làm và cùng phát một Kỳ.
+
+        Khoá nằm trên một kết nối riêng, vì phiên làm việc trả kết nối về sau mỗi lần commit.
+        Tiến trình chết thì kết nối đóng và Postgres tự nhả khoá.
+        """
+        engine = self._session_factory.kw["bind"]
+        with engine.connect() as connection:
+            locked = connection.scalar(select(func.pg_try_advisory_lock(RUN_LOCK, section.id)))
+            connection.commit()
+            if not locked:
+                raise RunInProgressError(
+                    f"Một tiến trình khác đang chạy Kỳ của Chuyên mục {section.slug}"
+                )
+            try:
+                yield
+            finally:
+                connection.execute(select(func.pg_advisory_unlock(RUN_LOCK, section.id)))
+                connection.commit()
 
     def _finish(self, session: Session, run: Run, since: datetime) -> RunRecord:
         """Làm Bản tin cho một Kỳ đã lưu và ghi kết quả vào nó."""
@@ -128,8 +215,8 @@ class Runner:
     def _make_bulletin(
         self, session: Session, run: Run, since: datetime
     ) -> tuple[RunOutcome, str | None]:
-        """Thu thập, gom Tin, sơ tuyển, để Biên tập dựng Bản tin và Kiểm chứng xét nó, rồi phát; trả
-        về kết quả của Kỳ kèm lí do.
+        """Thu thập, gom Tin, sơ tuyển, để Biên tập dựng Bản tin và Kiểm chứng xét nó, chụp ảnh rồi
+        phát; trả về kết quả của Kỳ kèm lí do.
 
         Mọi bước đều làm lại được trên cùng một Kỳ, để Kỳ bị gián đoạn chạy tiếp được.
         """
@@ -156,13 +243,15 @@ class Runner:
             )
         if run.verifier_guideline is None:
             return RunOutcome.FAILED, "Chưa có Hướng dẫn cho Kiểm chứng"
+        # Kỳ dùng các Bài gốc Lịch đã thu thập trong ngày, cộng một lượt thu thập ngay trước khi gom
+        # Tin. Đã có ứng viên thì không thu thập nữa: Bài gốc lấy về lúc ấy được ghi là xuất hiện
+        # trước giờ của Kỳ, nên không vào Kỳ này mà cũng không vào Kỳ sau.
+        collecting = run.bulletin is None and not run.candidates
         collected = [
-            self._collect(session, source, since, run.run_at) for source in section.sources
+            self._collect(session, source, since, run.run_at)
+            for source in (section.sources if collecting else ())
         ]
         session.commit()
-        if not any(collected):
-            # Hỏng chứ không phải "không phát": thử lại sau có thể lấy được.
-            return RunOutcome.FAILED, "Không thu thập được Nguồn nào"
         # Xét trước khi gọi Agent, để không tốn lời gọi LLM cho Bản tin không có nơi phát.
         if not section.channels:
             return RunOutcome.FAILED, "Chuyên mục chưa có Kênh đăng nào"
@@ -170,13 +259,13 @@ class Runner:
         if run.bulletin is None:
             # Ứng viên được lưu một lần; Kỳ chạy tiếp dùng lại đúng các ứng viên Biên tập đã thấy.
             if not run.candidates:
+                articles = _run_articles(session, section, since, run.run_at)
+                if not articles and not any(collected):
+                    # Hỏng chứ không phải "không phát": thử lại sau có thể lấy được.
+                    return RunOutcome.FAILED, "Không thu thập được Nguồn nào"
                 try:
                     clusters = clustering.cluster(
-                        session,
-                        self._embedder,
-                        section.id,
-                        _run_articles(session, section, since, run.run_at),
-                        run.run_at,
+                        session, self._embedder, section.id, articles, run.run_at
                     )
                 except Exception as error:
                     session.rollback()
@@ -216,8 +305,11 @@ class Runner:
             )
             # Biên tập làm việc lâu; không giữ giao dịch nào mở trong lúc đó.
             session.commit()
+            # Mỗi lần chạy Kỳ một lượt Biên tập riêng: lượt đã kết thúc với lỗi thì làm tiếp chỉ
+            # trả lại đúng lỗi ấy. Kỳ bị gián đoạn thì chạy tiếp trong cùng lượt.
+            thread_id = f"run-{run.id}-editor" + (f"-{run.attempts}" if run.attempts > 1 else "")
             try:
-                written = self._editor.work(f"run-{run.id}-editor", assignment, self._read_article)
+                written = self._editor.work(thread_id, assignment, self._read_article)
             except (EditorError, VerifierError) as error:
                 return RunOutcome.FAILED, str(error)
             except Exception as error:
@@ -261,28 +353,53 @@ class Runner:
                 f"Chỉ {story_count} Tin qua Kiểm chứng, dưới mức tối thiểu {MIN_STORIES}; "
                 "Bản tin không được phát"
             )
-        publish_errors = self._publish(section.channels, _content(run.bulletin))
-        delivered = len(section.channels) - len(publish_errors)
+        self._capture_images(session, _published_stories(run.bulletin))
+        publish_errors = self._publish(session, run.bulletin)
+        delivered = any(delivery.delivered for delivery in run.bulletin.deliveries)
         return (RunOutcome.PUBLISHED if delivered else RunOutcome.FAILED), "; ".join(
             publish_errors
         ) or None
 
-    def _collect(self, session: Session, source: Source, since: datetime, run_at: datetime) -> bool:
+    def _collect(self, session: Session, source: Source, since: datetime, now: datetime) -> bool:
         """Lấy và lưu Bài gốc mới của một Nguồn; trả về có lấy được hay không.
 
         Lỗi được ghi lại ở Nguồn, không lan ra ngoài.
         """
-        source.last_fetched_at = run_at
+        source.last_fetched_at = now
         try:
             new_articles = self._collectors[source.kind].collect(source.url, since)
             with session.begin_nested():
-                _save_articles(session, source, new_articles, run_at)
+                _save_articles(session, source, new_articles, now)
         except Exception as error:
             log.exception("Không thu thập được Nguồn %s", source.name)
             source.last_error = str(error)
             return False
         source.last_error = None
         return True
+
+    def _capture_images(self, session: Session, stories: Sequence[Story]) -> None:
+        """Lấy ảnh cho các Tin chưa có, mỗi Tin một lần; Kỳ chạy tiếp dùng lại ảnh đã lấy.
+
+        Tin không lấy được ảnh vẫn được phát, không ảnh.
+        """
+        for story in stories:
+            if story.image is not None:
+                continue
+            url = story.primary_article.url
+            # Chụp ảnh lâu; không giữ giao dịch nào mở trong lúc đó.
+            session.commit()
+            try:
+                capture = self._camera.capture(url)
+            except Exception as error:
+                log.exception("Chụp ảnh %s gặp lỗi", url)
+                first_line = (str(error).splitlines() or [type(error).__name__])[0]
+                capture = Capture(ImageKind.NONE, None, (f"Chụp ảnh gặp lỗi: {first_line}",))
+            story.image = StoryImage(
+                kind=capture.kind,
+                data=capture.data,
+                fallback_reason="\n".join(capture.failures) or None,
+            )
+            session.commit()
 
     def _read_article(self, article_id: int) -> str:
         """Toàn văn của một Bài gốc; lần đầu thì lấy về và lưu lại."""
@@ -293,16 +410,50 @@ class Runner:
                 session.commit()
             return article.full_text
 
-    def _publish(self, channels: Sequence[Channel], content: BulletinContent) -> list[str]:
-        """Phát tới từng Kênh đăng; trả về lỗi của những Kênh đăng không phát được."""
+    def _publish(self, session: Session, bulletin: Bulletin) -> list[str]:
+        """Phát tới từng Kênh đăng chưa nhận trọn Bản tin; trả về lỗi của những Kênh đăng không
+        phát được.
+
+        Kênh đăng đã nhận trọn thì bỏ qua, đã nhận một phần thì chỉ nhận phần còn lại, để không
+        Kênh đăng nào nhận Bản tin hai lần, kể cả khi thử lại hay chạy tiếp sau khi bị gián đoạn.
+        """
+        content = _content(bulletin)
+        deliveries = {delivery.channel_id: delivery for delivery in bulletin.deliveries}
         errors = []
-        for channel in channels:
-            try:
-                self._publishers[channel.kind].publish(channel.address, content)
-            except Exception as error:
-                log.exception("Không phát được tới Kênh đăng %s", channel.name)
+        for channel in bulletin.run.section.channels:
+            delivery = deliveries.get(channel.id)
+            if delivery is None:
+                delivery = Delivery(channel=channel, parts_sent=0, delivered=False)
+                bulletin.deliveries.append(delivery)
+            if delivery.delivered:
+                continue
+            error = self._deliver(session, channel, delivery, content)
+            if error is not None:
                 errors.append(f"Kênh đăng {channel.name} lỗi: {error}")
         return errors
+
+    def _deliver(
+        self, session: Session, channel: Channel, delivery: Delivery, content: BulletinContent
+    ) -> str | None:
+        """Phát phần còn lại của Bản tin tới một Kênh đăng; trả về lỗi nếu không phát trọn."""
+
+        def sent() -> None:
+            delivery.parts_sent += 1
+            session.commit()
+
+        # Phát lâu; không giữ giao dịch nào mở trong lúc đó.
+        session.commit()
+        try:
+            self._publishers[channel.kind].publish(
+                channel.address, content, skip=delivery.parts_sent, on_sent=sent
+            )
+        except Exception as error:
+            log.exception("Không phát được tới Kênh đăng %s", channel.name)
+            delivery.error = str(error)
+        else:
+            delivery.delivered, delivery.error = True, None
+        session.commit()
+        return delivery.error
 
     def history(self, section_slug: str) -> list[RunRecord]:
         """Các Kỳ đã lưu của Chuyên mục, mới nhất trước."""
@@ -314,6 +465,24 @@ class Runner:
                 .order_by(Run.run_at.desc(), Run.id.desc())
             )
             return [_record(run) for run in runs]
+
+
+def latest_run(session: Session, section_id: int) -> Run | None:
+    """Kỳ gần nhất của Chuyên mục."""
+    return session.scalar(
+        select(Run)
+        .where(Run.section_id == section_id)
+        .order_by(Run.run_at.desc(), Run.id.desc())
+        .limit(1)
+    )
+
+
+def can_retry(run: Run) -> bool:
+    """Chạy lại Kỳ hỏng này có thể ra kết quả khác không.
+
+    Bản tin đã dựng mà dưới mức tối thiểu thì không: chạy lại dùng đúng Bản tin ấy.
+    """
+    return run.bulletin is None or len(_published_stories(run.bulletin)) >= MIN_STORIES
 
 
 def _section(session: Session, slug: str) -> Section:
@@ -333,6 +502,7 @@ def _content(bulletin: Bulletin) -> BulletinContent:
                 story.summary,
                 story.primary_article.url,
                 is_update=story.update_of is not None,
+                image=story.image.data if story.image else None,
             )
             for story in _published_stories(bulletin)
         ),
@@ -354,6 +524,7 @@ def _record(run: Run) -> RunRecord:
         verifier_guideline_version=(
             run.verifier_guideline.version if run.verifier_guideline else None
         ),
+        attempts=run.attempts,
     )
 
 
@@ -368,7 +539,7 @@ def _since(session: Session, section: Section, run_at: datetime) -> datetime:
 
 
 def _save_articles(
-    session: Session, source: Source, new_articles: Sequence[NewArticle], run_at: datetime
+    session: Session, source: Source, new_articles: Sequence[NewArticle], now: datetime
 ) -> None:
     """Lưu các Bài gốc chưa có và ghi nhận chúng đã được thấy ở `source`."""
     if not new_articles:
@@ -384,8 +555,8 @@ def _save_articles(
                     "title": article.title,
                     "description": article.description,
                     # Nguồn ghi giờ xuất bản ở tương lai thì coi như vừa xuất hiện.
-                    "appeared_at": min(article.published_at or run_at, run_at),
-                    "collected_at": run_at,
+                    "appeared_at": min(article.published_at or now, now),
+                    "collected_at": now,
                 }
                 for article in new_articles
             ]

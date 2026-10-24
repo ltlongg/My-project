@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time
 from enum import StrEnum
 
 from pgvector.sqlalchemy import VECTOR
@@ -12,13 +12,17 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Index,
+    LargeBinary,
     Table,
     UniqueConstraint,
+    false,
     func,
     true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+from siftly.images import ImageKind
 
 
 class SourceKind(StrEnum):
@@ -91,6 +95,10 @@ class Section(Base):
     max_stories: Mapped[int]
     # Số ứng viên Tin tối đa qua Sơ tuyển để tới Biên tập mỗi Kỳ.
     shortlist_size: Mapped[int] = mapped_column(default=30, server_default="30")
+    # Giờ phát theo giờ Việt Nam: Lịch chạy một Kỳ của Chuyên mục vào giờ này mỗi ngày.
+    publish_time: Mapped[time] = mapped_column(default=time(8), server_default="08:00")
+    # Chuyên mục đang tạm dừng thì Lịch không chạy Kỳ nào cho nó; thiết lập vẫn giữ nguyên.
+    is_paused: Mapped[bool] = mapped_column(default=False, server_default=false())
 
     sources: Mapped[list[Source]] = relationship(secondary=section_sources, order_by="Source.id")
     channels: Mapped[list[Channel]] = relationship(
@@ -178,6 +186,12 @@ class Run(Base):
     # Phiên bản Hướng dẫn mà Biên tập và Kiểm chứng dùng ở Kỳ này.
     editor_guideline_id: Mapped[int | None] = mapped_column(ForeignKey("guidelines.id"))
     verifier_guideline_id: Mapped[int | None] = mapped_column(ForeignKey("guidelines.id"))
+    # Số lần đã chạy Kỳ này: lần đầu, rồi mỗi lần thử lại sau khi hỏng thêm một.
+    attempts: Mapped[int] = mapped_column(default=1, server_default="1")
+    # Lúc Lịch sẽ thử lại Kỳ hỏng này; trống là không có lần thử lại nào đang chờ.
+    retry_at: Mapped[datetime | None]
+    # Lúc chủ hệ thống được nhắn riêng về việc Kỳ này hỏng hẳn hoặc không phát; trống là chưa nhắn.
+    alerted_at: Mapped[datetime | None]
 
     section: Mapped[Section] = relationship()
     editor_guideline: Mapped[Guideline | None] = relationship(foreign_keys=[editor_guideline_id])
@@ -205,6 +219,32 @@ class Bulletin(Base):
     stories: Mapped[list[Story]] = relationship(
         back_populates="bulletin", order_by="Story.position"
     )
+    deliveries: Mapped[list[Delivery]] = relationship(
+        order_by="Delivery.channel_id", cascade="all, delete-orphan"
+    )
+
+
+class Delivery(Base):
+    """Việc phát một Bản tin tới một Kênh đăng.
+
+    Bộ phát gửi Bản tin thành nhiều phần theo thứ tự, ví dụ mỗi Tin một tin nhắn. Tiến độ được lưu
+    sau từng phần, để lần phát tiếp sau khi hỏng giữa chừng bỏ qua những phần đã tới nơi.
+    """
+
+    __tablename__ = "deliveries"
+
+    bulletin_id: Mapped[int] = mapped_column(
+        ForeignKey("bulletins.id", ondelete="CASCADE"), primary_key=True
+    )
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), primary_key=True)
+    # Số phần đầu của Bản tin đã tới Kênh đăng.
+    parts_sent: Mapped[int]
+    # Kênh đăng đã nhận trọn Bản tin.
+    delivered: Mapped[bool]
+    # Lỗi của lần phát gần nhất; phát trọn rồi thì để trống.
+    error: Mapped[str | None]
+
+    channel: Mapped[Channel] = relationship()
 
 
 class Candidate(Base):
@@ -258,6 +298,8 @@ class Story(Base):
     verifications: Mapped[list[Verification]] = relationship(
         back_populates="story", order_by="Verification.attempt", cascade="all, delete-orphan"
     )
+    # Ảnh đã đi kèm Tin khi phát; chưa có nghĩa là chưa tới bước chụp ảnh.
+    image: Mapped[StoryImage | None] = relationship(cascade="all, delete-orphan")
 
     @property
     def update_of(self) -> Story | None:
@@ -281,3 +323,18 @@ class Verification(Base):
     reason: Mapped[str]
 
     story: Mapped[Story] = relationship(back_populates="verifications")
+
+
+class StoryImage(Base):
+    """Ảnh đi kèm một Tin khi phát, đúng như đã gửi tới mọi Kênh đăng."""
+
+    __tablename__ = "story_images"
+
+    story_id: Mapped[int] = mapped_column(
+        ForeignKey("stories.id", ondelete="CASCADE"), primary_key=True
+    )
+    kind: Mapped[ImageKind] = mapped_column(_enum_column(ImageKind))
+    # Ảnh JPEG; Tin được phát không ảnh thì để trống.
+    data: Mapped[bytes | None] = mapped_column(LargeBinary)
+    # Vì sao không dùng được cách tốt hơn, ví dụ vì sao không chụp được trang; mỗi lí do một dòng.
+    fallback_reason: Mapped[str | None]
