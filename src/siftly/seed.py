@@ -1,5 +1,7 @@
 """Dữ liệu khởi tạo: đủ để chạy Kỳ đầu tiên khi chưa có trang quản lí."""
 
+from datetime import time
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -14,17 +16,33 @@ from siftly.models import (
 )
 
 TECH_SLUG = "tech"
+# Giờ phát theo giờ Việt Nam.
+TECH_PUBLISH_TIME = time(8)
 STARTER_RSS = ("VnExpress Khoa học công nghệ", "https://vnexpress.net/rss/khoa-hoc-cong-nghe.rss")
-# Bản tạm để Biên tập chạy được; ticket 14 soạn Hướng dẫn khởi đầu đầy đủ.
+# Mô tả phạm vi; chủ hệ thống sửa trên trang quản lí.
+TECH_SCOPE = (
+    "Tin công nghệ, ưu tiên AI (model mới, nghiên cứu, sản phẩm, chính sách), lập trình và công cụ "
+    "cho người làm phần mềm, chip và hạ tầng tính toán, và các công ty công nghệ lớn."
+)
+# Bản tạm để Biên tập chạy được; ticket 14 soạn Hướng dẫn khởi đầu đầy đủ. Phạm vi nằm ở
+# `TECH_SCOPE`, không nhắc lại ở đây.
 TECH_EDITOR_GUIDELINE = """\
-Phạm vi: tin công nghệ, ưu tiên AI (model mới, nghiên cứu, sản phẩm, chính sách), lập trình và \
-công cụ cho người làm phần mềm, chip và hạ tầng tính toán, và các công ty công nghệ lớn.
-
 Đáng đọc: sự kiện mới có tác động thật (ra mắt, số liệu, quyết định, sự cố), nêu được ai làm gì \
 và con số cụ thể. Ưu tiên nơi đưa tin đầu tiên hoặc nguồn gốc nhất.
 
 Không chọn: bài quảng cáo, khuyến mãi, mẹo vặt, bài đánh giá hay so sánh sản phẩm tiêu dùng không \
 có gì mới, tin giải trí, và hai Tin cùng nói về một sự kiện.
+
+Giọng văn: trung tính, đi thẳng vào việc, không giật tít, không bình luận thêm. Câu đầu của tóm \
+tắt nói ngay điều gì đã xảy ra."""
+# Hướng dẫn cho Biên tập của một Chuyên mục mới tạo trên trang quản lí; phạm vi nằm ở mô tả phạm
+# vi của Chuyên mục.
+STARTER_EDITOR_GUIDELINE = """\
+Đáng đọc: sự kiện mới có tác động thật (quyết định, số liệu, ra mắt, sự cố), nêu được ai làm gì \
+và con số cụ thể. Ưu tiên nơi đưa tin đầu tiên hoặc nguồn gốc nhất.
+
+Không chọn: bài quảng cáo, khuyến mãi, mẹo vặt, bài tổng hợp không có gì mới, và hai Tin cùng nói \
+về một sự kiện.
 
 Giọng văn: trung tính, đi thẳng vào việc, không giật tít, không bình luận thêm. Câu đầu của tóm \
 tắt nói ngay điều gì đã xảy ra."""
@@ -44,16 +62,20 @@ phải lí do để không đạt."""
 
 
 def seed(session_factory: sessionmaker[Session], telegram_chat_id: str | None) -> None:
-    """Tạo Chuyên mục công nghệ với một Nguồn RSS, Hướng dẫn cho Biên tập, Hướng dẫn chung cho
-    Kiểm chứng và, nếu đã biết mã nhóm, một Kênh đăng Telegram.
+    """Tạo Chuyên mục công nghệ phát lúc 8:00, có mô tả phạm vi, với một Nguồn RSS, Hướng dẫn cho
+    Biên tập, Hướng dẫn chung cho Kiểm chứng và, nếu đã biết mã nhóm, một Kênh đăng Telegram.
 
     Chạy lại không tạo trùng và không ghi đè thứ đã có; chỉ bổ sung thứ còn thiếu.
     """
     with session_factory.begin() as session:
         section = session.scalar(select(Section).where(Section.slug == TECH_SLUG))
         if section is None:
-            section = Section(slug=TECH_SLUG, name="Công nghệ", max_stories=7)
+            section = Section(
+                slug=TECH_SLUG, name="Công nghệ", max_stories=7, publish_time=TECH_PUBLISH_TIME
+            )
             session.add(section)
+        if not section.scope:
+            section.scope = TECH_SCOPE
 
         name, url = STARTER_RSS
         source = session.scalar(

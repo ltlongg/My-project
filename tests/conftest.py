@@ -1,20 +1,25 @@
-"""Khuôn test tại điểm "Chạy Kỳ": Nguồn giả, Kênh đăng giả, LLM theo kịch bản, bộ nhúng giả,
-đồng hồ giả, Postgres thật.
+"""Khuôn test tại hai điểm, cùng Postgres thật:
 
-Đồng hồ giả là tham số `run_at` của `Runner.run`: test tự nói "bây giờ" là lúc nào.
+- "Chạy Kỳ": Nguồn giả, Kênh đăng giả, LLM theo kịch bản, bộ nhúng giả, model chấm điểm giả, bộ
+  chụp ảnh giả, thông báo riêng giả, đồng hồ giả.
+- "API trang quản lí": gọi API thật qua HTTP, chưa đăng nhập (`api`) hoặc đã đăng nhập (`admin`).
+
+Đồng hồ giả là tham số `run_at` của `Runner.run`, `World.clock` của Lịch, và `api_clock` của API:
+test tự nói "bây giờ" là lúc nào.
 """
 
 import json
 import math
 import os
-from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass, field
-from datetime import datetime
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field, replace
+from datetime import datetime, time
 from itertools import count
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
+from fastapi.testclient import TestClient
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -23,6 +28,8 @@ from pydantic import Field
 from sqlalchemy import Engine, create_engine, func, make_url, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
+from siftly.admin import create_app
+from siftly.admin.auth import Account
 from siftly.agents.editor import Editor
 from siftly.agents.verifier import Verifier
 from siftly.collectors import NewArticle
@@ -33,6 +40,7 @@ from siftly.db import (
     open_checkpointer,
     upgrade,
 )
+from siftly.images import Capture, ImageKind
 from siftly.models import (
     Article,
     Base,
@@ -45,11 +53,14 @@ from siftly.models import (
     Source,
     SourceKind,
     Story,
+    StoryImage,
     Verification,
 )
-from siftly.publishers import BulletinContent
+from siftly.publishers import BulletinContent, StoryContent
 from siftly.runner import Runner
+from siftly.scheduler import Scheduler
 from siftly.search import SearchResult
+from siftly.shortlisting import ATTENTION_SIGNALS, Shortlister, Signal
 from siftly.urls import normalize_url
 
 DEFAULT_URL = "postgresql+psycopg://bulletin:bulletin@127.0.0.1:54320/bulletin_test"
@@ -105,6 +116,8 @@ class FakeCollector:
     """Bộ thu thập giả: trả về đúng những Bài gốc test đã đặt cho từng địa chỉ Nguồn."""
 
     def __init__(self) -> None:
+        # Địa chỉ Nguồn ở từng lần thu thập, theo thứ tự.
+        self.fetched: list[str] = []
         self._articles: dict[str, Sequence[NewArticle]] = {}
         self._errors: dict[str, Exception] = {}
 
@@ -116,28 +129,54 @@ class FakeCollector:
         self._errors[url] = error
 
     def collect(self, url: str, since: datetime) -> Sequence[NewArticle]:
+        self.fetched.append(url)
         if url in self._errors:
             raise self._errors[url]
         return self._articles.get(url, ())
 
 
 class FakePublisher:
-    """Bộ phát giả: ghi lại mọi Bản tin tới từng địa chỉ Kênh đăng."""
+    """Bộ phát giả: mỗi Tin là một phần của Bản tin. Ghi lại những gì tới từng địa chỉ Kênh đăng."""
 
     def __init__(self) -> None:
+        # Mỗi lần phát có Tin tới nơi: địa chỉ, và Bản tin chỉ gồm những Tin đã tới ở lần ấy.
         self.received: list[tuple[str, BulletinContent]] = []
-        self._errors: dict[str, Exception] = {}
+        # Mỗi tin nhắn thử đã tới nơi: địa chỉ và nội dung.
+        self.tests_received: list[tuple[str, str]] = []
+        self._errors: dict[str, tuple[BaseException, int]] = {}
 
-    def fail(self, address: str, error: Exception) -> None:
-        self._errors[address] = error
+    def fail(self, address: str, error: BaseException, after: int = 0) -> None:
+        """Phát tới `address` ném `error` sau khi `after` Tin đầu đã tới nơi; một BaseException
+        giả lập tiến trình bị dừng."""
+        self._errors[address] = (error, after)
 
     def fix(self, address: str) -> None:
         del self._errors[address]
 
-    def publish(self, address: str, bulletin: BulletinContent) -> None:
+    def publish(
+        self,
+        address: str,
+        bulletin: BulletinContent,
+        *,
+        skip: int = 0,
+        on_sent: Callable[[], None] = lambda: None,
+    ) -> None:
+        delivered: list[StoryContent] = []
+        try:
+            for position in range(skip, len(bulletin.stories)):
+                error, after = self._errors.get(address, (None, 0))
+                if error is not None and position >= after:
+                    raise error
+                delivered.append(bulletin.stories[position])
+                on_sent()
+        finally:
+            if delivered:
+                self.received.append((address, replace(bulletin, stories=tuple(delivered))))
+
+    def send_test(self, address: str, text: str) -> None:
         if address in self._errors:
-            raise self._errors[address]
-        self.received.append((address, bulletin))
+            raise self._errors[address][0]
+        self.tests_received.append((address, text))
 
 
 class FakeExtractor:
@@ -159,6 +198,55 @@ class FakeExtractor:
         if url in self._errors:
             raise self._errors[url]
         return self._full_texts.get(url, f"Toàn văn của {url}.")
+
+
+class FakeCamera:
+    """Bộ chụp ảnh giả: trả về ảnh test đã đặt cho từng địa chỉ, còn lại là không ảnh."""
+
+    def __init__(self) -> None:
+        self.captured: list[str] = []
+        self._captures: dict[str, Capture] = {}
+        self._errors: dict[str, Exception] = {}
+
+    def has(self, url: str, capture: Capture) -> None:
+        self._captures[url] = capture
+
+    def fail(self, url: str, error: Exception) -> None:
+        """Lần chụp `url` ném `error`, như một bộ chụp ảnh không giữ đúng giao diện."""
+        self._errors[url] = error
+
+    def capture(self, url: str) -> Capture:
+        self.captured.append(url)
+        if url in self._errors:
+            raise self._errors[url]
+        return self._captures.get(url, Capture(ImageKind.NONE, None, ("Không có ảnh",)))
+
+
+class FakeNotifier:
+    """Thông báo riêng giả: ghi lại mọi tin nhắn tới chủ hệ thống."""
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+        self._error: Exception | None = None
+
+    def fail(self, error: Exception | None) -> None:
+        """Mọi lần nhắn sau đều ném `error`; None là nhắn được bình thường."""
+        self._error = error
+
+    def notify(self, text: str) -> None:
+        if self._error is not None:
+            raise self._error
+        self.sent.append(text)
+
+
+@dataclass
+class FakeClock:
+    """Đồng hồ giả của Lịch: trả về đúng lúc test đặt."""
+
+    now: datetime = field(default_factory=lambda: at(1, 0))
+
+    def __call__(self) -> datetime:
+        return self.now
 
 
 class FakeSearcher:
@@ -467,6 +555,68 @@ def _story_under_check(messages: Sequence[BaseMessage]) -> dict[str, str]:
     return story
 
 
+class RuleBasedRaterLLM(BaseChatModel):
+    """LLM giả của Sơ tuyển: ứng viên có tiêu đề chứa một chi tiết test đã đặt thì nhận mức phù
+    hợp ấy, còn lại nhận `default`.
+
+    Các bước đặt bằng `will` được dùng trước luật, để test cho nó trả lời hỏng hay ném lỗi.
+    """
+
+    default: int = 8
+    relevance: dict[str, int] = Field(default_factory=dict)
+    script: list[AIMessage | BaseException] = Field(default_factory=list)
+    received: list[list[BaseMessage]] = Field(default_factory=list)
+
+    @property
+    def _llm_type(self) -> str:
+        return "rule-based-rater"
+
+    def bind_tools(self, tools: Any, **options: Any) -> "RuleBasedRaterLLM":
+        return self
+
+    def rate(self, detail: str, relevance: int) -> None:
+        """Ứng viên nào có `detail` trong một tiêu đề thì nhận mức phù hợp `relevance`."""
+        self.relevance[detail] = relevance
+
+    def will(self, *steps: AIMessage | BaseException) -> None:
+        self.script = list(steps)
+
+    def text_received(self, call: int = -1) -> str:
+        return "\n".join(str(message.content) for message in self.received[call])
+
+    def _generate(
+        self, messages: list[BaseMessage], stop: Any = None, run_manager: Any = None, **_: Any
+    ) -> ChatResult:
+        self.received.append(list(messages))
+        if self.script:
+            step = self.script.pop(0)
+            if isinstance(step, BaseException):
+                raise step
+            return ChatResult(generations=[ChatGeneration(message=step)])
+        task = next(str(m.content) for m in messages if isinstance(m, HumanMessage))
+        candidates = [json.loads(line) for line in task.splitlines() if line.startswith("{")]
+        ratings = [
+            {
+                "id": candidate["id"],
+                "relevance": next(
+                    (
+                        relevance
+                        for detail, relevance in self.relevance.items()
+                        if any(detail in title for title in candidate["titles"])
+                    ),
+                    self.default,
+                ),
+            }
+            for candidate in candidates
+        ]
+        return ChatResult(generations=[ChatGeneration(message=ratings_reply(ratings))])
+
+
+def ratings_reply(ratings: list[dict[str, Any]]) -> AIMessage:
+    """Sơ tuyển trả điểm cho các ứng viên."""
+    return AIMessage("", tool_calls=[_call("rate", {"ratings": ratings})])
+
+
 DEFAULT_GUIDELINE = "Chọn Tin đáng đọc nhất."
 DEFAULT_VERIFIER_GUIDELINE = "Đối chiếu số liệu, tên và ngày tháng với Bài gốc."
 
@@ -482,20 +632,41 @@ class World:
     extractor: FakeExtractor = field(default_factory=FakeExtractor)
     searcher: FakeSearcher = field(default_factory=FakeSearcher)
     embedder: FakeEmbedder = field(default_factory=FakeEmbedder)
+    rater: RuleBasedRaterLLM = field(default_factory=RuleBasedRaterLLM)
     llm: ScriptedLLM = field(default_factory=ScriptedLLM)
     verifier: RuleBasedVerifierLLM = field(default_factory=RuleBasedVerifierLLM)
+    camera: FakeCamera = field(default_factory=FakeCamera)
+    notifier: FakeNotifier = field(default_factory=FakeNotifier)
+    clock: FakeClock = field(default_factory=FakeClock)
     runner: Runner = field(init=False)
+    scheduler: Scheduler = field(init=False)
 
     def __post_init__(self) -> None:
+        self.use_signals(ATTENTION_SIGNALS)
+        self.set_verifier_guideline(DEFAULT_VERIFIER_GUIDELINE)
+
+    def use_signals(self, signals: Mapping[str, Signal]) -> None:
+        """Sơ tuyển tính độ chú ý từ các tín hiệu này."""
         self.runner = Runner(
             self.session_factory,
             collectors={SourceKind.RSS: self.collector},
             publishers={ChannelKind.TELEGRAM: self.publisher},
             extractor=self.extractor,
             embedder=self.embedder,
+            shortlister=Shortlister(self.rater, signals),
             editor=Editor(self.llm, Verifier(self.verifier), self.searcher, self.checkpointer),
+            camera=self.camera,
         )
-        self.set_verifier_guideline(DEFAULT_VERIFIER_GUIDELINE)
+        self.restart()
+
+    def restart(self) -> None:
+        """Dựng lại Lịch như khi dịch vụ khởi động lại: chỉ còn những gì đã lưu."""
+        self.scheduler = Scheduler(self.session_factory, self.runner, self.notifier, self.clock)
+
+    def tick(self, now: datetime) -> None:
+        """Lịch làm những việc đã tới giờ vào lúc `now`."""
+        self.clock.now = now
+        self.scheduler.tick()
 
     def add_section(
         self,
@@ -505,14 +676,26 @@ class World:
         sources: Sequence[str],
         channels: Sequence[str],
         max_stories: int = 7,
+        shortlist_size: int = 30,
         guideline: str | None = DEFAULT_GUIDELINE,
+        publish_time: time = time(8),
+        paused: bool = False,
     ) -> None:
         """Khai một Chuyên mục; Nguồn và Kênh đăng trùng địa chỉ được dùng chung.
 
         `guideline` là Hướng dẫn cho Biên tập, phiên bản 1; None là chưa có Hướng dẫn.
+        `publish_time` là giờ phát theo giờ Việt Nam.
         """
         with self.session_factory.begin() as session:
-            section = Section(slug=slug, name=name, max_stories=max_stories)
+            section = Section(
+                slug=slug,
+                name=name,
+                max_stories=max_stories,
+                shortlist_size=shortlist_size,
+                publish_time=publish_time,
+                is_paused=paused,
+            )
+            session.add(section)
             for url in sources:
                 existing = session.scalar(select(Source).where(Source.url == url))
                 section.sources.append(existing or Source(kind=SourceKind.RSS, name=url, url=url))
@@ -521,9 +704,15 @@ class World:
                 section.channels.append(
                     channel or Channel(kind=ChannelKind.TELEGRAM, name=address, address=address)
                 )
-            session.add(section)
         if guideline is not None:
             self.set_guideline(slug, guideline)
+
+    def set_paused(self, section_slug: str, paused: bool) -> None:
+        """Tạm dừng hoặc bật lại một Chuyên mục."""
+        with self.session_factory.begin() as session:
+            session.execute(
+                update(Section).where(Section.slug == section_slug).values(is_paused=paused)
+            )
 
     def set_guideline(self, section_slug: str, content: str) -> int:
         """Đặt một phiên bản Hướng dẫn mới của Biên tập có hiệu lực; trả về số phiên bản."""
@@ -631,6 +820,31 @@ class World:
                 )
             ]
 
+    def stored_scores(self) -> list[tuple[list[str], float, dict[str, float], bool]]:
+        """Từng ứng viên đã lưu, theo Kỳ rồi theo thứ hạng: địa chỉ các Bài gốc, điểm Sơ tuyển, các
+        điểm thành phần, và có tới Biên tập không."""
+        with self.session_factory() as session:
+            return [
+                (
+                    [article.url for article in candidate.articles],
+                    candidate.score or 0.0,
+                    candidate.score_components or {},
+                    candidate.shortlisted,
+                )
+                for candidate in session.scalars(
+                    select(Candidate).order_by(Candidate.run_id, Candidate.position)
+                )
+            ]
+
+    def stored_images(self) -> dict[str, tuple[ImageKind, bytes | None, str | None]]:
+        """Ảnh đã lưu của từng Tin, theo địa chỉ Bài gốc chính: loại ảnh, ảnh, lí do không dùng
+        được cách tốt hơn."""
+        with self.session_factory() as session:
+            return {
+                story.primary_article.url: (image.kind, image.data, image.fallback_reason)
+                for image, story in session.execute(select(StoryImage, Story).join(Story))
+            }
+
     def verifications(self, url: str) -> list[tuple[str, str, bool, str]]:
         """Các lượt Kiểm chứng đã lưu của Tin về Bài gốc ở `url`, theo thứ tự: tiêu đề và tóm
         tắt được xét, đạt hay không, lí do."""
@@ -648,5 +862,59 @@ class World:
 
 
 @pytest.fixture
-def world(session_factory: sessionmaker[Session], checkpointer: PostgresSaver) -> World:
-    return World(session_factory, checkpointer)
+def collector() -> FakeCollector:
+    """Bộ thu thập giả chung của Chạy Kỳ và của API, nơi bấm thử Nguồn."""
+    return FakeCollector()
+
+
+@pytest.fixture
+def publisher() -> FakePublisher:
+    """Bộ phát giả chung của Chạy Kỳ và của API, nơi gửi tin nhắn thử tới Kênh đăng."""
+    return FakePublisher()
+
+
+@pytest.fixture
+def world(
+    session_factory: sessionmaker[Session],
+    checkpointer: PostgresSaver,
+    collector: FakeCollector,
+    publisher: FakePublisher,
+) -> World:
+    return World(session_factory, checkpointer, collector=collector, publisher=publisher)
+
+
+ADMIN = Account("chu-he-thong", "mat-khau-thu-nghiem")
+
+
+@pytest.fixture
+def api_clock() -> FakeClock:
+    """Đồng hồ giả của API, để tính hạn phiên đăng nhập."""
+    return FakeClock()
+
+
+@pytest.fixture
+def api(
+    session_factory: sessionmaker[Session],
+    api_clock: FakeClock,
+    collector: FakeCollector,
+    publisher: FakePublisher,
+) -> Iterator[TestClient]:
+    """API trang quản lí, chưa đăng nhập. Tài khoản duy nhất là `ADMIN`. Bấm thử Nguồn và gửi tin
+    nhắn thử đi qua cùng bộ thu thập và bộ phát giả với `world`."""
+    app = create_app(
+        session_factory,
+        ADMIN,
+        collectors={SourceKind.RSS: collector},
+        publishers={ChannelKind.TELEGRAM: publisher},
+        clock=api_clock,
+    )
+    with TestClient(app) as client:
+        yield client
+
+
+@pytest.fixture
+def admin(api: TestClient) -> TestClient:
+    """API trang quản lí, đã đăng nhập."""
+    response = api.post("/api/login", json={"username": ADMIN.username, "password": ADMIN.password})
+    assert response.status_code == 204, response.text
+    return api

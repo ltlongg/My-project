@@ -109,9 +109,9 @@ def test_a_like_b_and_b_like_c_but_a_unlike_c_are_not_all_clustered(tech: World)
 
     tech.runner.run("tech", at(7, 8))
 
-    assert [group for group, _ in tech.llm.candidates_seen()] == [
-        [c.url],
+    assert sorted(group for group, _ in tech.llm.candidates_seen()) == [
         [a.url, b.url],
+        [c.url],
     ]
 
 

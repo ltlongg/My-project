@@ -221,7 +221,7 @@ def test_section_without_channels_fails_run_with_reason(world: World) -> None:
     run = world.runner.run("tech", at(7, 8))
 
     assert run.outcome is RunOutcome.FAILED
-    assert run.reason == "Chuyên mục chưa có Kênh đăng nào"
+    assert run.reason == "Chuyên mục chưa có Kênh đăng nào đang bật"
 
 
 def test_bulletin_is_stored_exactly_as_sent(world: World) -> None:
@@ -272,4 +272,4 @@ def test_section_without_sources_fails_run_with_reason(world: World) -> None:
     run = world.runner.run("tech", at(7, 8))
 
     assert run.outcome is RunOutcome.FAILED
-    assert run.reason == "Chuyên mục chưa có Nguồn nào"
+    assert run.reason == "Chuyên mục chưa có Nguồn nào đang bật"
